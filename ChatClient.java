@@ -7,33 +7,60 @@ import java.util.*;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.swing.*;
+import javax.swing.border.LineBorder;
 
+/**
+ * A modern dark-mode chat client with:
+ * - Clear brand/title at the top
+ * - More prominent buttons with improved text contrast
+ * - Dark color scheme with an accent color
+ * - Larger fonts for readability
+ * - Single/double ticks for message status
+ * - File sharing with a 'Download' button
+ * - "Refresh Chat" button in the main chat panel
+ * - A loader dialog that stays visible for 2 seconds
+ */
 public class ChatClient extends JFrame {
-    // Persistent storage file for users and chat history.
+
+    // ----------- Color & Font Scheme -----------
+    private static final Color DARK_BG = new Color(35, 35, 35); // Main background
+    private static final Color DARKER_BG = new Color(25, 25, 25); // Panel background
+    private static final Color LIGHT_TEXT = new Color(220, 220, 220);
+    // Use a lighter accent background for buttons, so black text is visible:
+    private static final Color ACCENT_COLOR = new Color(100, 255, 218);
+    private static final Color BUTTON_TEXT = Color.BLACK;
+    private static final Color FIELD_BG = new Color(60, 60, 60);
+
+    private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 36);
+    private static final Font LABEL_FONT = new Font("SansSerif", Font.BOLD, 16);
+    private static final Font FIELD_FONT = new Font("SansSerif", Font.PLAIN, 16);
+    private static final Font BUTTON_FONT = new Font("SansSerif", Font.BOLD, 16);
+
+    // Persistent storage file for users and chat history
     private static final String DATA_FILE = "chatapp_data.ser";
     // Map of registered users (username -> User)
     private Map<String, User> users;
-    // Currently logged in user.
+    // Currently logged in user
     private User currentUser;
 
-    // CardLayout for switching screens (login, register, chat).
+    // CardLayout for switching screens (login, register, chat)
     private CardLayout cardLayout;
     private JPanel mainPanel;
 
-    // Network client for real-time messaging.
+    // Network client for real-time messaging
     private NetworkClient networkClient;
     private final String SERVER_ADDRESS = "localhost";
     private final int SERVER_PORT = 12345;
 
-    // Reference to ChatMainPanel to update conversation panels.
+    // Reference to ChatMainPanel to update conversation panels
     private ChatMainPanel chatMainPanel;
 
-    // For generating unique message IDs.
+    // For generating unique message IDs
     private AtomicLong messageIdGenerator = new AtomicLong(System.currentTimeMillis());
 
     public ChatClient() {
-        setTitle("Modern Chat App - Chat Client");
-        setSize(900, 650);
+        setTitle("Dark Mode Chat App - Chat Client");
+        setSize(1000, 700);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
@@ -41,6 +68,7 @@ public class ChatClient extends JFrame {
 
         cardLayout = new CardLayout();
         mainPanel = new JPanel(cardLayout);
+        mainPanel.setBackground(DARK_BG);
 
         mainPanel.add(new LoginPanel(), "login");
         mainPanel.add(new RegistrationPanel(), "register");
@@ -51,7 +79,7 @@ public class ChatClient extends JFrame {
         cardLayout.show(mainPanel, "login");
     }
 
-    // Load persistent user data.
+    // Load persistent user data
     @SuppressWarnings("unchecked")
     private void loadData() {
         File file = new File(DATA_FILE);
@@ -66,7 +94,7 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // Save persistent user data.
+    // Save persistent user data
     private void saveData() {
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(DATA_FILE))) {
             oos.writeObject(users);
@@ -75,17 +103,39 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // User data model (must be Serializable).
+    // Quick loader method: show a dialog for 2 seconds
+    private void showLoader(String message) {
+        JDialog loader = new JDialog(this, "Loading", true);
+        loader.setSize(300, 100);
+        loader.setLocationRelativeTo(this);
+        loader.setLayout(new BorderLayout());
+
+        JLabel label = new JLabel(message, SwingConstants.CENTER);
+        label.setForeground(LIGHT_TEXT);
+        label.setFont(LABEL_FONT);
+        loader.getContentPane().setBackground(DARK_BG);
+        loader.add(label, BorderLayout.CENTER);
+
+        // Close after 2 seconds
+        javax.swing.Timer t = new javax.swing.Timer(2000, e -> loader.dispose());
+
+        t.setRepeats(false);
+        t.start();
+
+        loader.setVisible(true);
+    }
+
+    // ========== DATA MODELS ==========
     private static class User implements Serializable {
         private static final long serialVersionUID = 1L;
         String name;
         String username;
         String password;
-        // Chat history: contact -> list of Message objects.
+        // Chat history: contact -> list of Message objects
         Map<String, List<Message>> chatHistory = new HashMap<>();
-        // Unread counts: contact -> count of unread messages.
+        // Unread counts: contact -> count of unread messages
         Map<String, Integer> unreadCounts = new HashMap<>();
-        // Unread snippets: contact -> snippet text.
+        // Unread snippets: contact -> snippet text
         Map<String, String> unreadSnippets = new HashMap<>();
 
         User(String name, String username, String password) {
@@ -95,50 +145,70 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // Login Panel.
+    // ========== LOGIN PANEL ==========
     private class LoginPanel extends JPanel {
         public LoginPanel() {
+            setBackground(DARK_BG);
             setLayout(new BorderLayout());
-            setBackground(new Color(245, 245, 245));
 
+            // Title
             JLabel title = new JLabel("Login", SwingConstants.CENTER);
-            title.setFont(new Font("SansSerif", Font.BOLD, 32));
-            title.setForeground(new Color(30, 144, 255));
+            title.setFont(TITLE_FONT);
+            title.setForeground(ACCENT_COLOR);
             add(title, BorderLayout.NORTH);
 
+            // Form
             JPanel formPanel = new JPanel(new GridBagLayout());
-            formPanel.setBackground(new Color(245, 245, 245));
+            formPanel.setBackground(DARK_BG);
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(10, 10, 10, 10);
             gbc.fill = GridBagConstraints.HORIZONTAL;
 
+            // Username label
             gbc.gridx = 0;
             gbc.gridy = 0;
-            formPanel.add(new JLabel("Username:"), gbc);
+            JLabel userLabel = new JLabel("Username:");
+            userLabel.setFont(LABEL_FONT);
+            userLabel.setForeground(LIGHT_TEXT);
+            formPanel.add(userLabel, gbc);
+
+            // Username field
             gbc.gridx = 1;
             JTextField usernameField = new JTextField(20);
+            styleTextField(usernameField);
             formPanel.add(usernameField, gbc);
 
+            // Password label
             gbc.gridx = 0;
             gbc.gridy = 1;
-            formPanel.add(new JLabel("Password:"), gbc);
+            JLabel passLabel = new JLabel("Password:");
+            passLabel.setFont(LABEL_FONT);
+            passLabel.setForeground(LIGHT_TEXT);
+            formPanel.add(passLabel, gbc);
+
+            // Password field
             gbc.gridx = 1;
             JPasswordField passwordField = new JPasswordField(20);
+            styleTextField(passwordField);
             formPanel.add(passwordField, gbc);
 
-            JButton loginButton = new JButton("Login");
+            // Login button
             gbc.gridx = 0;
             gbc.gridy = 2;
             gbc.gridwidth = 2;
+            JButton loginButton = new JButton("LOGIN");
+            styleButton(loginButton);
             formPanel.add(loginButton, gbc);
 
-            JButton toRegisterButton = new JButton("Register");
+            // Register button
             gbc.gridy = 3;
+            JButton toRegisterButton = new JButton("REGISTER");
+            styleButton(toRegisterButton);
             formPanel.add(toRegisterButton, gbc);
 
             add(formPanel, BorderLayout.CENTER);
 
-            // Action Listeners.
+            // Action Listeners
             loginButton.addActionListener(e -> {
                 String username = usernameField.getText().trim();
                 String password = new String(passwordField.getPassword());
@@ -149,6 +219,7 @@ public class ChatClient extends JFrame {
                 if (users.containsKey(username)) {
                     User user = users.get(username);
                     if (user.password.equals(password)) {
+                        showLoader("Logging in...");
                         currentUser = user;
                         chatMainPanel.refreshContacts();
                         chatMainPanel.refreshChatHistory();
@@ -163,56 +234,81 @@ public class ChatClient extends JFrame {
                 }
             });
 
-            toRegisterButton.addActionListener(e -> cardLayout.show(mainPanel, "register"));
+            toRegisterButton.addActionListener(e -> {
+                showLoader("Opening Registration...");
+                cardLayout.show(mainPanel, "register");
+            });
         }
     }
 
-    // Registration Panel.
+    // ========== REGISTRATION PANEL ==========
     private class RegistrationPanel extends JPanel {
         public RegistrationPanel() {
+            setBackground(DARK_BG);
             setLayout(new BorderLayout());
-            setBackground(new Color(245, 245, 245));
 
             JLabel title = new JLabel("Register", SwingConstants.CENTER);
-            title.setFont(new Font("SansSerif", Font.BOLD, 32));
-            title.setForeground(new Color(34, 139, 34));
+            title.setFont(TITLE_FONT);
+            title.setForeground(new Color(200, 100, 255));
             add(title, BorderLayout.NORTH);
 
             JPanel formPanel = new JPanel(new GridBagLayout());
-            formPanel.setBackground(new Color(245, 245, 245));
+            formPanel.setBackground(DARK_BG);
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(10, 10, 10, 10);
             gbc.fill = GridBagConstraints.HORIZONTAL;
 
+            // Name label
             gbc.gridx = 0;
             gbc.gridy = 0;
-            formPanel.add(new JLabel("Name:"), gbc);
+            JLabel nameLabel = new JLabel("Name:");
+            nameLabel.setForeground(LIGHT_TEXT);
+            nameLabel.setFont(LABEL_FONT);
+            formPanel.add(nameLabel, gbc);
+
             gbc.gridx = 1;
             JTextField nameField = new JTextField(20);
+            styleTextField(nameField);
             formPanel.add(nameField, gbc);
 
+            // Username label
             gbc.gridx = 0;
             gbc.gridy = 1;
-            formPanel.add(new JLabel("Username:"), gbc);
+            JLabel userLabel = new JLabel("Username:");
+            userLabel.setForeground(LIGHT_TEXT);
+            userLabel.setFont(LABEL_FONT);
+            formPanel.add(userLabel, gbc);
+
             gbc.gridx = 1;
             JTextField usernameField = new JTextField(20);
+            styleTextField(usernameField);
             formPanel.add(usernameField, gbc);
 
+            // Password label
             gbc.gridx = 0;
             gbc.gridy = 2;
-            formPanel.add(new JLabel("Password:"), gbc);
+            JLabel passLabel = new JLabel("Password:");
+            passLabel.setForeground(LIGHT_TEXT);
+            passLabel.setFont(LABEL_FONT);
+            formPanel.add(passLabel, gbc);
+
             gbc.gridx = 1;
             JPasswordField passwordField = new JPasswordField(20);
+            styleTextField(passwordField);
             formPanel.add(passwordField, gbc);
 
-            JButton registerButton = new JButton("Register");
+            // Register button
             gbc.gridx = 0;
             gbc.gridy = 3;
             gbc.gridwidth = 2;
+            JButton registerButton = new JButton("REGISTER");
+            styleButton(registerButton);
             formPanel.add(registerButton, gbc);
 
-            JButton backToLoginButton = new JButton("Back to Login");
+            // Back to login
             gbc.gridy = 4;
+            JButton backToLoginButton = new JButton("BACK TO LOGIN");
+            styleButton(backToLoginButton);
             formPanel.add(backToLoginButton, gbc);
 
             add(formPanel, BorderLayout.CENTER);
@@ -232,73 +328,88 @@ public class ChatClient extends JFrame {
                 User newUser = new User(name, username, password);
                 users.put(username, newUser);
                 saveData();
+                showLoader("Registering...");
                 JOptionPane.showMessageDialog(this, "Registration successful! Please login.", "Success",
                         JOptionPane.INFORMATION_MESSAGE);
                 cardLayout.show(mainPanel, "login");
             });
 
-            backToLoginButton.addActionListener(e -> cardLayout.show(mainPanel, "login"));
+            backToLoginButton.addActionListener(e -> {
+                showLoader("Going back to Login...");
+                cardLayout.show(mainPanel, "login");
+            });
         }
     }
 
-    // Main Chat Panel with contacts list, conversation area, logout, refresh, and
-    // file sharing.
+    // ========== MAIN CHAT PANEL ==========
     private class ChatMainPanel extends JPanel {
         private DefaultListModel<String> contactsModel;
         private JList<String> contactsList;
         private JPanel chatSessionPanel;
         private JLabel headerLabel;
-        // To track the currently open conversation.
         private String currentChatContact = null;
-        private JPanel conversationPanel; // Panel to hold individual message panels.
+        private JPanel conversationPanel;
 
         public ChatMainPanel() {
             setLayout(new BorderLayout());
-            setBackground(Color.WHITE);
+            setBackground(DARK_BG);
 
-            // Header with welcome message, refresh and logout buttons.
+            // Header bar
             JPanel headerPanel = new JPanel(new BorderLayout());
-            headerPanel.setBackground(new Color(30, 144, 255));
+            headerPanel.setBackground(DARKER_BG);
             headerPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-            headerLabel = new JLabel("Welcome, ", SwingConstants.LEFT);
+            headerLabel = new JLabel("Welcome, ...", SwingConstants.LEFT);
             headerLabel.setFont(new Font("SansSerif", Font.BOLD, 28));
-            headerLabel.setForeground(Color.WHITE);
+            headerLabel.setForeground(ACCENT_COLOR);
             headerPanel.add(headerLabel, BorderLayout.WEST);
 
-            JPanel eastPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-            eastPanel.setOpaque(false);
-            JButton refreshButton = new JButton("Refresh Contacts");
-            refreshButton.setFocusPainted(false);
+            // RIGHT side: Refresh + Logout
+            JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+            rightPanel.setOpaque(false);
+
+            JButton refreshButton = new JButton("REFRESH CHAT");
+            styleButton(refreshButton);
             refreshButton.addActionListener(e -> {
-                loadData(); // Reload persistent data.
+                loadData();
                 refreshContacts();
+                refreshChatHistory();
+                JOptionPane.showMessageDialog(this, "Chats Refreshed!");
             });
-            JButton logoutButton = new JButton("Logout");
-            logoutButton.setFocusPainted(false);
+
+            JButton logoutButton = new JButton("LOGOUT");
+            styleButton(logoutButton);
             logoutButton.addActionListener(e -> {
                 if (networkClient != null)
                     networkClient.close();
                 currentUser = null;
                 cardLayout.show(mainPanel, "login");
             });
-            eastPanel.add(refreshButton);
-            eastPanel.add(logoutButton);
-            headerPanel.add(eastPanel, BorderLayout.EAST);
+
+            rightPanel.add(refreshButton);
+            rightPanel.add(logoutButton);
+
+            headerPanel.add(rightPanel, BorderLayout.EAST);
             add(headerPanel, BorderLayout.NORTH);
 
-            // Contacts list on the left, including unread count and snippet.
+            // Contacts list
             contactsModel = new DefaultListModel<>();
             contactsList = new JList<>(contactsModel);
-            contactsList.setFont(new Font("SansSerif", Font.PLAIN, 16));
+            contactsList.setBackground(DARKER_BG);
+            contactsList.setForeground(LIGHT_TEXT);
+            contactsList.setFont(FIELD_FONT);
+
             JScrollPane contactsScroll = new JScrollPane(contactsList);
             contactsScroll.setPreferredSize(new Dimension(250, 0));
-            contactsScroll.setBorder(BorderFactory.createTitledBorder("Contacts"));
+            contactsScroll.setBorder(BorderFactory.createTitledBorder(
+                    new LineBorder(ACCENT_COLOR), "Contacts"));
+            contactsScroll.getViewport().setBackground(DARKER_BG);
 
-            // Chat session panel on the right.
+            // Chat session
             chatSessionPanel = new JPanel(new BorderLayout());
-            chatSessionPanel.setBorder(BorderFactory.createTitledBorder("Conversation"));
-            chatSessionPanel.setBackground(new Color(250, 250, 250));
+            chatSessionPanel.setBackground(DARKER_BG);
+            chatSessionPanel.setBorder(BorderFactory.createTitledBorder(
+                    new LineBorder(ACCENT_COLOR), "Conversation"));
 
             contactsList.addMouseListener(new MouseAdapter() {
                 @Override
@@ -306,7 +417,6 @@ public class ChatClient extends JFrame {
                     if (e.getClickCount() == 2) {
                         String display = contactsList.getSelectedValue();
                         if (display != null) {
-                            // Extract username from display.
                             String contact = display.split(" ")[0];
                             openChatSession(contact);
                         }
@@ -315,10 +425,13 @@ public class ChatClient extends JFrame {
             });
 
             JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, contactsScroll, chatSessionPanel);
+            splitPane.setDividerLocation(250);
             add(splitPane, BorderLayout.CENTER);
         }
 
         public void refreshContacts() {
+            if (currentUser == null)
+                return;
             headerLabel.setText("Welcome, " + currentUser.name);
             contactsModel.clear();
             for (String uname : users.keySet()) {
@@ -338,12 +451,12 @@ public class ChatClient extends JFrame {
         }
 
         public void refreshChatHistory() {
-            // Chat history is loaded from currentUser.
+            // Reload from currentUser (already in memory).
+            // If you want to force from disk, call loadData() first.
         }
 
         public void openChatSession(String contact) {
             currentChatContact = contact;
-            // Clear unread count and snippet for this contact.
             currentUser.unreadCounts.put(contact, 0);
             currentUser.unreadSnippets.remove(contact);
             refreshContacts();
@@ -351,12 +464,15 @@ public class ChatClient extends JFrame {
             chatSessionPanel.removeAll();
             chatSessionPanel.setLayout(new BorderLayout());
 
-            // Conversation panel to hold messages.
             conversationPanel = new JPanel();
             conversationPanel.setLayout(new BoxLayout(conversationPanel, BoxLayout.Y_AXIS));
-            JScrollPane convScroll = new JScrollPane(conversationPanel);
+            conversationPanel.setBackground(DARK_BG);
 
-            // Load conversation history if exists.
+            JScrollPane convScroll = new JScrollPane(conversationPanel);
+            convScroll.setBorder(null);
+            convScroll.getViewport().setBackground(DARK_BG);
+
+            // Load conversation
             List<Message> history = currentUser.chatHistory.get(contact);
             if (history != null) {
                 for (Message m : history) {
@@ -364,19 +480,23 @@ public class ChatClient extends JFrame {
                 }
             }
 
-            // Input panel with text field, Send, Send File, and Close Chat buttons.
-            JTextField inputField = new JTextField();
-            inputField.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            JButton sendMsgButton = new JButton("Send");
-            JButton sendFileButton = new JButton("Send File");
-            JButton closeChatButton = new JButton("Close Chat");
-            JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-            inputPanel.add(inputField);
-            inputPanel.add(sendMsgButton);
-            inputPanel.add(sendFileButton);
-            inputPanel.add(closeChatButton);
+            // Input panel
+            JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
+            inputPanel.setBackground(DARKER_BG);
 
-            sendMsgButton.addActionListener(e -> {
+            JTextField inputField = new JTextField(30);
+            styleTextField(inputField);
+
+            JButton sendButton = new JButton("Send");
+            styleButton(sendButton);
+
+            JButton sendFileButton = new JButton("Send File");
+            styleButton(sendFileButton);
+
+            JButton closeChatButton = new JButton("Close Chat");
+            styleButton(closeChatButton);
+
+            sendButton.addActionListener(e -> {
                 String msgText = inputField.getText().trim();
                 if (!msgText.isEmpty()) {
                     String msgId = currentUser.username + "-" + messageIdGenerator.getAndIncrement();
@@ -395,15 +515,14 @@ public class ChatClient extends JFrame {
             });
 
             sendFileButton.addActionListener(e -> {
-                JFileChooser fileChooser = new JFileChooser();
-                int res = fileChooser.showOpenDialog(ChatMainPanel.this);
+                JFileChooser fc = new JFileChooser();
+                int res = fc.showOpenDialog(chatSessionPanel);
                 if (res == JFileChooser.APPROVE_OPTION) {
-                    File file = fileChooser.getSelectedFile();
+                    File file = fc.getSelectedFile();
                     try {
-                        byte[] fileBytes = Files.readAllBytes(file.toPath());
-                        String base64Encoded = Base64.getEncoder().encodeToString(fileBytes);
+                        byte[] data = Files.readAllBytes(file.toPath());
+                        String base64Encoded = Base64.getEncoder().encodeToString(data);
                         String msgId = currentUser.username + "-" + messageIdGenerator.getAndIncrement();
-                        // The content field will store the file name.
                         Message fileMsg = new Message(msgId, currentUser.username, contact, file.getName(), "FILE",
                                 base64Encoded);
                         fileMsg.setStatus("PENDING");
@@ -416,7 +535,7 @@ public class ChatClient extends JFrame {
                                     + contact + "|" + file.getName() + "|" + base64Encoded);
                         }
                     } catch (IOException ex) {
-                        JOptionPane.showMessageDialog(ChatMainPanel.this, "Error reading file: " + ex.getMessage());
+                        JOptionPane.showMessageDialog(chatSessionPanel, "Error reading file: " + ex.getMessage());
                     }
                 }
             });
@@ -428,12 +547,17 @@ public class ChatClient extends JFrame {
                 currentChatContact = null;
             });
 
+            inputPanel.add(inputField);
+            inputPanel.add(sendButton);
+            inputPanel.add(sendFileButton);
+            inputPanel.add(closeChatButton);
+
             chatSessionPanel.add(convScroll, BorderLayout.CENTER);
             chatSessionPanel.add(inputPanel, BorderLayout.SOUTH);
             chatSessionPanel.revalidate();
             chatSessionPanel.repaint();
 
-            // Mark messages as read.
+            // Mark messages as read
             if (currentUser.chatHistory.containsKey(contact)) {
                 for (Message m : currentUser.chatHistory.get(contact)) {
                     if (!"READ".equals(m.getStatus()) && m.getSender().equals(contact)) {
@@ -447,10 +571,11 @@ public class ChatClient extends JFrame {
             }
         }
 
-        // Create a JPanel to represent a single message.
         private JPanel createMessagePanel(Message m) {
             JPanel panel = new JPanel(new BorderLayout());
             panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+            panel.setBackground(DARKER_BG);
+
             JLabel msgLabel;
             if (m.getType().equals("MSG")) {
                 msgLabel = new JLabel(m.getSender() + ": " + m.getContent());
@@ -459,35 +584,44 @@ public class ChatClient extends JFrame {
             } else {
                 msgLabel = new JLabel(m.getSender() + ": " + m.getContent());
             }
+            msgLabel.setForeground(LIGHT_TEXT);
             panel.add(msgLabel, BorderLayout.CENTER);
-            // Status label for delivery/read ticks.
+
             JLabel statusLabel = new JLabel();
+            statusLabel.setForeground(new Color(0, 255, 0)); // bright green ticks
             if (m.getSender().equals(currentUser.username)) {
-                if ("DELIVERED".equals(m.getStatus()))
-                    statusLabel.setText(" ✔");
-                else if ("READ".equals(m.getStatus()))
-                    statusLabel.setText(" ✔✔");
-                else
-                    statusLabel.setText(" …");
+                switch (m.getStatus()) {
+                    case "DELIVERED":
+                        statusLabel.setText(" ✔");
+                        break;
+                    case "READ":
+                        statusLabel.setText(" ✔✔");
+                        break;
+                    default:
+                        statusLabel.setText(" …");
+                        break;
+                }
             }
             panel.add(statusLabel, BorderLayout.EAST);
-            // For file messages, add a Download button.
+
             if (m.getType().equals("FILE")) {
                 JButton downloadBtn = new JButton("Download");
+                styleButton(downloadBtn);
+                downloadBtn.setFont(new Font("SansSerif", Font.PLAIN, 14));
                 downloadBtn.addActionListener(e -> {
                     JFileChooser chooser = new JFileChooser();
                     chooser.setSelectedFile(new File(m.getContent()));
-                    int res = chooser.showSaveDialog(ChatMainPanel.this);
+                    int res = chooser.showSaveDialog(chatSessionPanel);
                     if (res == JFileChooser.APPROVE_OPTION) {
                         File outFile = chooser.getSelectedFile();
                         try {
                             byte[] data = Base64.getDecoder().decode(m.getFileData());
                             Files.write(outFile.toPath(), data);
-                            JOptionPane.showMessageDialog(ChatMainPanel.this,
+                            JOptionPane.showMessageDialog(chatSessionPanel,
                                     "File downloaded to " + outFile.getAbsolutePath());
                             downloadBtn.setEnabled(false);
                         } catch (IOException ex) {
-                            JOptionPane.showMessageDialog(ChatMainPanel.this, "Error saving file: " + ex.getMessage());
+                            JOptionPane.showMessageDialog(chatSessionPanel, "Error saving file: " + ex.getMessage());
                         }
                     }
                 });
@@ -502,27 +636,29 @@ public class ChatClient extends JFrame {
                 int cnt = currentUser.unreadCounts.getOrDefault(contact, 0) + 1;
                 currentUser.unreadCounts.put(contact, cnt);
                 String snippet = m.getType().equals("FILE") ? "[File: " + m.getContent() + "]" : m.getContent();
-                currentUser.unreadSnippets.put(contact,
-                        snippet.length() > 20 ? snippet.substring(0, 20) + "..." : snippet);
+                if (snippet.length() > 20)
+                    snippet = snippet.substring(0, 20) + "...";
+                currentUser.unreadSnippets.put(contact, snippet);
             }
             saveData();
         }
 
-        // Called by NetworkClient when a message is received.
-        public void updateConversation(String contact, String messageStr) {
+        public void updateConversation(String contact, String displayText) {
             if (currentChatContact != null && currentChatContact.equals(contact)) {
-                conversationPanel.add(new JLabel(messageStr));
+                JLabel label = new JLabel(displayText);
+                label.setForeground(LIGHT_TEXT);
+                JPanel p = new JPanel(new BorderLayout());
+                p.setBackground(DARKER_BG);
+                p.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+                p.add(label, BorderLayout.CENTER);
+                conversationPanel.add(p);
                 conversationPanel.revalidate();
                 conversationPanel.repaint();
             }
-            Message m = new Message("", contact, currentUser.username, messageStr, "MSG", null);
-            m.setStatus("READ");
-            currentUser.chatHistory.computeIfAbsent(contact, k -> new ArrayList<>()).add(m);
-            saveData();
         }
     }
 
-    // NetworkClient: connects to ChatServer and handles sending/receiving messages.
+    // ========== NETWORK CLIENT ==========
     private class NetworkClient implements Runnable {
         private Socket socket;
         private PrintWriter out;
@@ -535,15 +671,12 @@ public class ChatClient extends JFrame {
                 socket = new Socket(SERVER_ADDRESS, SERVER_PORT);
                 out = new PrintWriter(socket.getOutputStream(), true);
                 in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                // Send username for identification.
-                out.println(username);
+                out.println(username); // identify
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(ChatClient.this, "Unable to connect to server: " + e.getMessage());
             }
         }
 
-        // Send a message using protocol:
-        // TYPE|messageId|sender|recipient|content|[optional fileData]
         public void sendMessage(String recipient, String message) {
             if (out != null) {
                 out.println(message);
@@ -584,6 +717,7 @@ public class ChatClient extends JFrame {
                         if (chatMainPanel.currentChatContact != null
                                 && chatMainPanel.currentChatContact.equals(sender)) {
                             sendMessage(sender, "ACK|" + msgId + "|READ");
+                            m.setStatus("READ");
                         }
                     } else if (type.equals("FILE")) {
                         if (parts.length < 6)
@@ -611,6 +745,7 @@ public class ChatClient extends JFrame {
                         if (chatMainPanel.currentChatContact != null
                                 && chatMainPanel.currentChatContact.equals(sender)) {
                             sendMessage(sender, "ACK|" + msgId + "|READ");
+                            m.setStatus("READ");
                         }
                     } else if (type.equals("ACK")) {
                         if (parts.length < 3)
@@ -636,7 +771,26 @@ public class ChatClient extends JFrame {
         }
     }
 
+    // Style text fields
+    private void styleTextField(JTextField field) {
+        field.setFont(FIELD_FONT);
+        field.setBackground(FIELD_BG);
+        field.setForeground(LIGHT_TEXT);
+        field.setCaretColor(LIGHT_TEXT);
+        field.setBorder(new LineBorder(ACCENT_COLOR, 1));
+    }
+
+    // Style buttons: accent background, black text
+    private void styleButton(JButton button) {
+        button.setBackground(ACCENT_COLOR);
+        button.setForeground(BUTTON_TEXT);
+        button.setFont(BUTTON_FONT);
+        button.setFocusPainted(false);
+        button.setBorder(new LineBorder(Color.WHITE, 1));
+    }
+
     public static void main(String[] args) {
+        // Optionally set system look & feel
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception e) {
