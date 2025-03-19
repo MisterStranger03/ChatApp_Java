@@ -1,33 +1,24 @@
+import javax.swing.*;
+import javax.swing.border.LineBorder;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
-import java.net.*;
+import java.net.Socket;
 import java.nio.file.Files;
+import java.sql.*;
 import java.util.*;
 import java.util.List;
+import java.util.Base64;
 import java.util.concurrent.atomic.AtomicLong;
-import javax.swing.*;
-import javax.swing.border.LineBorder;
 
-/**
- * A modern dark-mode chat client with:
- * - Clear brand/title at the top
- * - More prominent buttons with improved text contrast
- * - Dark color scheme with an accent color
- * - Larger fonts for readability
- * - Single/double ticks for message status
- * - File sharing with a 'Download' button
- * - "Refresh Chat" button in the main chat panel
- * - A loader dialog that stays visible for 2 seconds
- */
 public class ChatClient extends JFrame {
 
-    // ----------- Color & Font Scheme -----------
-    private static final Color DARK_BG = new Color(35, 35, 35); // Main background
-    private static final Color DARKER_BG = new Color(25, 25, 25); // Panel background
+    // ------------- Color and Font Constants -------------
+    private static final Color DARK_BG = new Color(35, 35, 35);
+    private static final Color DARKER_BG = new Color(25, 25, 25);
     private static final Color LIGHT_TEXT = new Color(220, 220, 220);
-    // Use a lighter accent background for buttons, so black text is visible:
     private static final Color ACCENT_COLOR = new Color(100, 255, 218);
+    private static final Color BUTTON_BG = new Color(100, 255, 218);
     private static final Color BUTTON_TEXT = Color.BLACK;
     private static final Color FIELD_BG = new Color(60, 60, 60);
 
@@ -36,35 +27,145 @@ public class ChatClient extends JFrame {
     private static final Font FIELD_FONT = new Font("SansSerif", Font.PLAIN, 16);
     private static final Font BUTTON_FONT = new Font("SansSerif", Font.BOLD, 16);
 
-    // Persistent storage file for users and chat history
-    private static final String DATA_FILE = "chatapp_data.ser";
-    // Map of registered users (username -> User)
-    private Map<String, User> users;
-    // Currently logged in user
-    private User currentUser;
+    // ------------- Database Info -------------
+    private static final String DB_URL = "jdbc:sqlite:chatapp.db";
 
-    // CardLayout for switching screens (login, register, chat)
+    // ------------- Data Models -------------
+    // We'll define User and Message as static nested classes.
+    public static class User implements Serializable {
+        private static final long serialVersionUID = 1L;
+        public String name;
+        public String username;
+        public String password;
+        public String profilePhotoBase64; // Base64-encoded photo
+        public Map<String, List<Message>> chatHistory = new HashMap<>();
+        public Map<String, Integer> unreadCounts = new HashMap<>();
+        public Map<String, String> unreadSnippets = new HashMap<>();
+
+        public User(String name, String username, String password) {
+            this.name = name;
+            this.username = username;
+            this.password = password;
+            this.profilePhotoBase64 = null;
+        }
+    }
+
+    public static class Message implements Serializable {
+        private static final long serialVersionUID = 1L;
+        private String messageId;
+        private String sender;
+        private String recipient;
+        private String content;
+        private String type; // "MSG" or "FILE"
+        private String fileData; // Base64 encoded file data (if FILE)
+        private String status; // "PENDING", "DELIVERED", "READ"
+        private long timestamp;
+
+        public Message(String messageId, String sender, String recipient, String content, String type,
+                String fileData) {
+            this.messageId = messageId;
+            this.sender = sender;
+            this.recipient = recipient;
+            this.content = content;
+            this.type = type;
+            this.fileData = fileData;
+            this.status = "PENDING";
+            this.timestamp = System.currentTimeMillis();
+        }
+
+        public String getMessageId() {
+            return messageId;
+        }
+
+        public void setMessageId(String messageId) {
+            this.messageId = messageId;
+        }
+
+        public String getSender() {
+            return sender;
+        }
+
+        public void setSender(String sender) {
+            this.sender = sender;
+        }
+
+        public String getRecipient() {
+            return recipient;
+        }
+
+        public void setRecipient(String recipient) {
+            this.recipient = recipient;
+        }
+
+        public String getContent() {
+            return content;
+        }
+
+        public void setContent(String content) {
+            this.content = content;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getFileData() {
+            return fileData;
+        }
+
+        public void setFileData(String fileData) {
+            this.fileData = fileData;
+        }
+
+        public String getStatus() {
+            return status;
+        }
+
+        public void setStatus(String status) {
+            this.status = status;
+        }
+
+        public long getTimestamp() {
+            return timestamp;
+        }
+
+        public void setTimestamp(long timestamp) {
+            this.timestamp = timestamp;
+        }
+    }
+
+    // ------------- UI Components -------------
     private CardLayout cardLayout;
     private JPanel mainPanel;
+    private ChatMainPanel chatMainPanel;
+    private ProfilePanel profilePanel;
 
-    // Network client for real-time messaging
+    // ------------- Network Components -------------
     private NetworkClient networkClient;
     private final String SERVER_ADDRESS = "localhost";
     private final int SERVER_PORT = 12345;
 
-    // Reference to ChatMainPanel to update conversation panels
-    private ChatMainPanel chatMainPanel;
-
-    // For generating unique message IDs
+    // ------------- Others -------------
     private AtomicLong messageIdGenerator = new AtomicLong(System.currentTimeMillis());
+    private SQLDatabase db;
+    private Map<String, User> users; // All users loaded from DB.
+    private User currentUser; // The logged-in user.
 
+    // ------------- Constructor -------------
     public ChatClient() {
         setTitle("Dark Mode Chat App - Chat Client");
         setSize(1000, 700);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
-        loadData();
+        // Initialize database and load users
+        db = new SQLDatabase();
+        db.initialize();
+        users = db.loadUsers();
 
         cardLayout = new CardLayout();
         mainPanel = new JPanel(cardLayout);
@@ -74,97 +175,64 @@ public class ChatClient extends JFrame {
         mainPanel.add(new RegistrationPanel(), "register");
         chatMainPanel = new ChatMainPanel();
         mainPanel.add(chatMainPanel, "chat");
+        profilePanel = new ProfilePanel();
+        mainPanel.add(profilePanel, "profile");
 
         add(mainPanel);
         cardLayout.show(mainPanel, "login");
     }
 
-    // Load persistent user data
-    @SuppressWarnings("unchecked")
-    private void loadData() {
-        File file = new File(DATA_FILE);
-        if (file.exists()) {
-            try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file))) {
-                users = (Map<String, User>) ois.readObject();
-            } catch (Exception e) {
-                users = new HashMap<>();
-            }
-        } else {
-            users = new HashMap<>();
-        }
-    }
-
-    // Save persistent user data
-    private void saveData() {
-        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(DATA_FILE))) {
-            oos.writeObject(users);
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Error saving data: " + e.getMessage());
-        }
-    }
-
-    // Quick loader method: show a dialog for 2 seconds
+    // ------------- Utility Methods -------------
     private void showLoader(String message) {
         JDialog loader = new JDialog(this, "Loading", true);
         loader.setSize(300, 100);
         loader.setLocationRelativeTo(this);
         loader.setLayout(new BorderLayout());
-
         JLabel label = new JLabel(message, SwingConstants.CENTER);
         label.setForeground(LIGHT_TEXT);
         label.setFont(LABEL_FONT);
         loader.getContentPane().setBackground(DARK_BG);
         loader.add(label, BorderLayout.CENTER);
-
-        // Close after 2 seconds
+        // Use javax.swing.Timer to avoid ambiguity
         javax.swing.Timer t = new javax.swing.Timer(2000, e -> loader.dispose());
-
         t.setRepeats(false);
         t.start();
-
         loader.setVisible(true);
     }
 
-    // ========== DATA MODELS ==========
-    private static class User implements Serializable {
-        private static final long serialVersionUID = 1L;
-        String name;
-        String username;
-        String password;
-        // Chat history: contact -> list of Message objects
-        Map<String, List<Message>> chatHistory = new HashMap<>();
-        // Unread counts: contact -> count of unread messages
-        Map<String, Integer> unreadCounts = new HashMap<>();
-        // Unread snippets: contact -> snippet text
-        Map<String, String> unreadSnippets = new HashMap<>();
-
-        User(String name, String username, String password) {
-            this.name = name;
-            this.username = username;
-            this.password = password;
-        }
+    private void styleTextField(JTextField field) {
+        field.setFont(FIELD_FONT);
+        field.setBackground(FIELD_BG);
+        field.setForeground(LIGHT_TEXT);
+        field.setCaretColor(LIGHT_TEXT);
+        field.setBorder(new LineBorder(ACCENT_COLOR, 1));
     }
 
-    // ========== LOGIN PANEL ==========
+    private void styleButton(JButton button) {
+        button.setBackground(BUTTON_BG);
+        button.setForeground(BUTTON_TEXT);
+        button.setFont(BUTTON_FONT);
+        button.setFocusPainted(false);
+        button.setBorder(new LineBorder(Color.WHITE, 1));
+    }
+
+    // ------------- LOGIN PANEL -------------
     private class LoginPanel extends JPanel {
         public LoginPanel() {
             setBackground(DARK_BG);
             setLayout(new BorderLayout());
 
-            // Title
             JLabel title = new JLabel("Login", SwingConstants.CENTER);
             title.setFont(TITLE_FONT);
             title.setForeground(ACCENT_COLOR);
             add(title, BorderLayout.NORTH);
 
-            // Form
             JPanel formPanel = new JPanel(new GridBagLayout());
             formPanel.setBackground(DARK_BG);
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(10, 10, 10, 10);
             gbc.fill = GridBagConstraints.HORIZONTAL;
 
-            // Username label
             gbc.gridx = 0;
             gbc.gridy = 0;
             JLabel userLabel = new JLabel("Username:");
@@ -172,13 +240,11 @@ public class ChatClient extends JFrame {
             userLabel.setForeground(LIGHT_TEXT);
             formPanel.add(userLabel, gbc);
 
-            // Username field
             gbc.gridx = 1;
             JTextField usernameField = new JTextField(20);
             styleTextField(usernameField);
             formPanel.add(usernameField, gbc);
 
-            // Password label
             gbc.gridx = 0;
             gbc.gridy = 1;
             JLabel passLabel = new JLabel("Password:");
@@ -186,13 +252,11 @@ public class ChatClient extends JFrame {
             passLabel.setForeground(LIGHT_TEXT);
             formPanel.add(passLabel, gbc);
 
-            // Password field
             gbc.gridx = 1;
             JPasswordField passwordField = new JPasswordField(20);
             styleTextField(passwordField);
             formPanel.add(passwordField, gbc);
 
-            // Login button
             gbc.gridx = 0;
             gbc.gridy = 2;
             gbc.gridwidth = 2;
@@ -200,7 +264,6 @@ public class ChatClient extends JFrame {
             styleButton(loginButton);
             formPanel.add(loginButton, gbc);
 
-            // Register button
             gbc.gridy = 3;
             JButton toRegisterButton = new JButton("REGISTER");
             styleButton(toRegisterButton);
@@ -208,7 +271,6 @@ public class ChatClient extends JFrame {
 
             add(formPanel, BorderLayout.CENTER);
 
-            // Action Listeners
             loginButton.addActionListener(e -> {
                 String username = usernameField.getText().trim();
                 String password = new String(passwordField.getPassword());
@@ -221,6 +283,7 @@ public class ChatClient extends JFrame {
                     if (user.password.equals(password)) {
                         showLoader("Logging in...");
                         currentUser = user;
+                        currentUser.chatHistory = db.loadMessagesForUser(currentUser.username);
                         chatMainPanel.refreshContacts();
                         chatMainPanel.refreshChatHistory();
                         networkClient = new NetworkClient(currentUser.username);
@@ -241,7 +304,7 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ========== REGISTRATION PANEL ==========
+    // ------------- REGISTRATION PANEL -------------
     private class RegistrationPanel extends JPanel {
         public RegistrationPanel() {
             setBackground(DARK_BG);
@@ -258,12 +321,11 @@ public class ChatClient extends JFrame {
             gbc.insets = new Insets(10, 10, 10, 10);
             gbc.fill = GridBagConstraints.HORIZONTAL;
 
-            // Name label
             gbc.gridx = 0;
             gbc.gridy = 0;
             JLabel nameLabel = new JLabel("Name:");
-            nameLabel.setForeground(LIGHT_TEXT);
             nameLabel.setFont(LABEL_FONT);
+            nameLabel.setForeground(LIGHT_TEXT);
             formPanel.add(nameLabel, gbc);
 
             gbc.gridx = 1;
@@ -271,12 +333,11 @@ public class ChatClient extends JFrame {
             styleTextField(nameField);
             formPanel.add(nameField, gbc);
 
-            // Username label
             gbc.gridx = 0;
             gbc.gridy = 1;
             JLabel userLabel = new JLabel("Username:");
-            userLabel.setForeground(LIGHT_TEXT);
             userLabel.setFont(LABEL_FONT);
+            userLabel.setForeground(LIGHT_TEXT);
             formPanel.add(userLabel, gbc);
 
             gbc.gridx = 1;
@@ -284,12 +345,11 @@ public class ChatClient extends JFrame {
             styleTextField(usernameField);
             formPanel.add(usernameField, gbc);
 
-            // Password label
             gbc.gridx = 0;
             gbc.gridy = 2;
             JLabel passLabel = new JLabel("Password:");
-            passLabel.setForeground(LIGHT_TEXT);
             passLabel.setFont(LABEL_FONT);
+            passLabel.setForeground(LIGHT_TEXT);
             formPanel.add(passLabel, gbc);
 
             gbc.gridx = 1;
@@ -297,7 +357,6 @@ public class ChatClient extends JFrame {
             styleTextField(passwordField);
             formPanel.add(passwordField, gbc);
 
-            // Register button
             gbc.gridx = 0;
             gbc.gridy = 3;
             gbc.gridwidth = 2;
@@ -305,7 +364,6 @@ public class ChatClient extends JFrame {
             styleButton(registerButton);
             formPanel.add(registerButton, gbc);
 
-            // Back to login
             gbc.gridy = 4;
             JButton backToLoginButton = new JButton("BACK TO LOGIN");
             styleButton(backToLoginButton);
@@ -327,7 +385,7 @@ public class ChatClient extends JFrame {
                 }
                 User newUser = new User(name, username, password);
                 users.put(username, newUser);
-                saveData();
+                db.saveUser(newUser);
                 showLoader("Registering...");
                 JOptionPane.showMessageDialog(this, "Registration successful! Please login.", "Success",
                         JOptionPane.INFORMATION_MESSAGE);
@@ -341,7 +399,139 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ========== MAIN CHAT PANEL ==========
+    // ------------- PROFILE PANEL -------------
+    private class ProfilePanel extends JPanel {
+        private JLabel photoLabel;
+        private JTextField nameField, usernameField;
+        private JPasswordField passwordField;
+        private JButton saveButton, loadPhotoButton;
+
+        public ProfilePanel() {
+            setLayout(new BorderLayout());
+            setBackground(DARK_BG);
+
+            JLabel title = new JLabel("Profile Settings", SwingConstants.CENTER);
+            title.setFont(TITLE_FONT);
+            title.setForeground(new Color(255, 200, 100));
+            add(title, BorderLayout.NORTH);
+
+            JPanel formPanel = new JPanel(new GridBagLayout());
+            formPanel.setBackground(DARK_BG);
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(10, 10, 10, 10);
+            gbc.fill = GridBagConstraints.HORIZONTAL;
+
+            gbc.gridx = 0;
+            gbc.gridy = 0;
+            JLabel nameLabel = new JLabel("Name:");
+            nameLabel.setFont(LABEL_FONT);
+            nameLabel.setForeground(LIGHT_TEXT);
+            formPanel.add(nameLabel, gbc);
+            gbc.gridx = 1;
+            nameField = new JTextField(20);
+            styleTextField(nameField);
+            formPanel.add(nameField, gbc);
+
+            gbc.gridx = 0;
+            gbc.gridy = 1;
+            JLabel userLabel = new JLabel("Username:");
+            userLabel.setFont(LABEL_FONT);
+            userLabel.setForeground(LIGHT_TEXT);
+            formPanel.add(userLabel, gbc);
+            gbc.gridx = 1;
+            usernameField = new JTextField(20);
+            styleTextField(usernameField);
+            formPanel.add(usernameField, gbc);
+
+            gbc.gridx = 0;
+            gbc.gridy = 2;
+            JLabel passLabel = new JLabel("Password:");
+            passLabel.setFont(LABEL_FONT);
+            passLabel.setForeground(LIGHT_TEXT);
+            formPanel.add(passLabel, gbc);
+            gbc.gridx = 1;
+            passwordField = new JPasswordField(20);
+            styleTextField(passwordField);
+            formPanel.add(passwordField, gbc);
+
+            gbc.gridx = 0;
+            gbc.gridy = 3;
+            JLabel photoTextLabel = new JLabel("Profile Photo:");
+            photoTextLabel.setFont(LABEL_FONT);
+            photoTextLabel.setForeground(LIGHT_TEXT);
+            formPanel.add(photoTextLabel, gbc);
+            gbc.gridx = 1;
+            photoLabel = new JLabel();
+            photoLabel.setPreferredSize(new Dimension(100, 100));
+            photoLabel.setOpaque(true);
+            photoLabel.setBackground(FIELD_BG);
+            formPanel.add(photoLabel, gbc);
+
+            gbc.gridx = 1;
+            gbc.gridy = 4;
+            loadPhotoButton = new JButton("Load Photo");
+            styleButton(loadPhotoButton);
+            formPanel.add(loadPhotoButton, gbc);
+
+            gbc.gridx = 0;
+            gbc.gridy = 5;
+            gbc.gridwidth = 2;
+            saveButton = new JButton("SAVE CHANGES");
+            styleButton(saveButton);
+            formPanel.add(saveButton, gbc);
+
+            add(formPanel, BorderLayout.CENTER);
+
+            loadPhotoButton.addActionListener(e -> {
+                JFileChooser fc = new JFileChooser();
+                int res = fc.showOpenDialog(ProfilePanel.this);
+                if (res == JFileChooser.APPROVE_OPTION) {
+                    File f = fc.getSelectedFile();
+                    try {
+                        byte[] data = Files.readAllBytes(f.toPath());
+                        String base64 = Base64.getEncoder().encodeToString(data);
+                        currentUser.profilePhotoBase64 = base64;
+                        ImageIcon icon = new ImageIcon(Base64.getDecoder().decode(base64));
+                        Image img = icon.getImage().getScaledInstance(100, 100, Image.SCALE_SMOOTH);
+                        photoLabel.setIcon(new ImageIcon(img));
+                    } catch (IOException ex) {
+                        JOptionPane.showMessageDialog(ProfilePanel.this, "Error loading photo: " + ex.getMessage());
+                    }
+                }
+            });
+
+            saveButton.addActionListener(e -> {
+                if (currentUser == null)
+                    return;
+                showLoader("Saving Profile...");
+                currentUser.name = nameField.getText().trim();
+                currentUser.username = usernameField.getText().trim();
+                currentUser.password = new String(passwordField.getPassword());
+                db.updateUser(currentUser);
+                JOptionPane.showMessageDialog(ProfilePanel.this, "Profile updated!");
+                chatMainPanel.refreshContacts();
+                cardLayout.show(mainPanel, "chat");
+            });
+        }
+
+        public void loadProfileData() {
+            if (currentUser != null) {
+                nameField.setText(currentUser.name);
+                usernameField.setText(currentUser.username);
+                passwordField.setText(currentUser.password);
+                if (currentUser.profilePhotoBase64 != null) {
+                    ImageIcon icon = new ImageIcon(Base64.getDecoder().decode(currentUser.profilePhotoBase64));
+                    Image img = icon.getImage().getScaledInstance(100, 100, Image.SCALE_SMOOTH);
+                    photoLabel.setIcon(new ImageIcon(img));
+                } else {
+                    photoLabel.setIcon(null);
+                    photoLabel.setText("No Photo");
+                }
+            }
+        }
+    }
+
+    // ------------- MAIN CHAT PANEL -------------
     private class ChatMainPanel extends JPanel {
         private DefaultListModel<String> contactsModel;
         private JList<String> contactsList;
@@ -354,29 +544,33 @@ public class ChatClient extends JFrame {
             setLayout(new BorderLayout());
             setBackground(DARK_BG);
 
-            // Header bar
             JPanel headerPanel = new JPanel(new BorderLayout());
             headerPanel.setBackground(DARKER_BG);
             headerPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
             headerLabel = new JLabel("Welcome, ...", SwingConstants.LEFT);
-            headerLabel.setFont(new Font("SansSerif", Font.BOLD, 28));
+            headerLabel.setFont(TITLE_FONT);
             headerLabel.setForeground(ACCENT_COLOR);
             headerPanel.add(headerLabel, BorderLayout.WEST);
 
-            // RIGHT side: Refresh + Logout
             JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
             rightPanel.setOpaque(false);
-
-            JButton refreshButton = new JButton("REFRESH CHAT");
-            styleButton(refreshButton);
-            refreshButton.addActionListener(e -> {
-                loadData();
+            JButton refreshChatButton = new JButton("REFRESH CHAT");
+            styleButton(refreshChatButton);
+            refreshChatButton.addActionListener(e -> {
+                users = db.loadUsers();
                 refreshContacts();
                 refreshChatHistory();
-                JOptionPane.showMessageDialog(this, "Chats Refreshed!");
+                JOptionPane.showMessageDialog(ChatMainPanel.this, "Chats Refreshed!");
             });
-
+            JButton profileButton = new JButton("PROFILE");
+            styleButton(profileButton);
+            profileButton.addActionListener(e -> {
+                if (currentUser != null) {
+                    profilePanel.loadProfileData();
+                    cardLayout.show(mainPanel, "profile");
+                }
+            });
             JButton logoutButton = new JButton("LOGOUT");
             styleButton(logoutButton);
             logoutButton.addActionListener(e -> {
@@ -385,31 +579,25 @@ public class ChatClient extends JFrame {
                 currentUser = null;
                 cardLayout.show(mainPanel, "login");
             });
-
-            rightPanel.add(refreshButton);
+            rightPanel.add(refreshChatButton);
+            rightPanel.add(profileButton);
             rightPanel.add(logoutButton);
-
             headerPanel.add(rightPanel, BorderLayout.EAST);
             add(headerPanel, BorderLayout.NORTH);
 
-            // Contacts list
             contactsModel = new DefaultListModel<>();
             contactsList = new JList<>(contactsModel);
             contactsList.setBackground(DARKER_BG);
             contactsList.setForeground(LIGHT_TEXT);
             contactsList.setFont(FIELD_FONT);
-
             JScrollPane contactsScroll = new JScrollPane(contactsList);
             contactsScroll.setPreferredSize(new Dimension(250, 0));
-            contactsScroll.setBorder(BorderFactory.createTitledBorder(
-                    new LineBorder(ACCENT_COLOR), "Contacts"));
+            contactsScroll.setBorder(BorderFactory.createTitledBorder(new LineBorder(ACCENT_COLOR), "Contacts"));
             contactsScroll.getViewport().setBackground(DARKER_BG);
 
-            // Chat session
             chatSessionPanel = new JPanel(new BorderLayout());
             chatSessionPanel.setBackground(DARKER_BG);
-            chatSessionPanel.setBorder(BorderFactory.createTitledBorder(
-                    new LineBorder(ACCENT_COLOR), "Conversation"));
+            chatSessionPanel.setBorder(BorderFactory.createTitledBorder(new LineBorder(ACCENT_COLOR), "Conversation"));
 
             contactsList.addMouseListener(new MouseAdapter() {
                 @Override
@@ -451,8 +639,7 @@ public class ChatClient extends JFrame {
         }
 
         public void refreshChatHistory() {
-            // Reload from currentUser (already in memory).
-            // If you want to force from disk, call loadData() first.
+            // Chat history is loaded from currentUser.
         }
 
         public void openChatSession(String contact) {
@@ -467,12 +654,10 @@ public class ChatClient extends JFrame {
             conversationPanel = new JPanel();
             conversationPanel.setLayout(new BoxLayout(conversationPanel, BoxLayout.Y_AXIS));
             conversationPanel.setBackground(DARK_BG);
-
             JScrollPane convScroll = new JScrollPane(conversationPanel);
             convScroll.setBorder(null);
             convScroll.getViewport().setBackground(DARK_BG);
 
-            // Load conversation
             List<Message> history = currentUser.chatHistory.get(contact);
             if (history != null) {
                 for (Message m : history) {
@@ -480,23 +665,18 @@ public class ChatClient extends JFrame {
                 }
             }
 
-            // Input panel
             JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
             inputPanel.setBackground(DARKER_BG);
-
             JTextField inputField = new JTextField(30);
             styleTextField(inputField);
-
-            JButton sendButton = new JButton("Send");
-            styleButton(sendButton);
-
+            JButton sendMsgButton = new JButton("Send");
+            styleButton(sendMsgButton);
             JButton sendFileButton = new JButton("Send File");
             styleButton(sendFileButton);
-
             JButton closeChatButton = new JButton("Close Chat");
             styleButton(closeChatButton);
 
-            sendButton.addActionListener(e -> {
+            sendMsgButton.addActionListener(e -> {
                 String msgText = inputField.getText().trim();
                 if (!msgText.isEmpty()) {
                     String msgId = currentUser.username + "-" + messageIdGenerator.getAndIncrement();
@@ -548,7 +728,7 @@ public class ChatClient extends JFrame {
             });
 
             inputPanel.add(inputField);
-            inputPanel.add(sendButton);
+            inputPanel.add(sendMsgButton);
             inputPanel.add(sendFileButton);
             inputPanel.add(closeChatButton);
 
@@ -557,7 +737,6 @@ public class ChatClient extends JFrame {
             chatSessionPanel.revalidate();
             chatSessionPanel.repaint();
 
-            // Mark messages as read
             if (currentUser.chatHistory.containsKey(contact)) {
                 for (Message m : currentUser.chatHistory.get(contact)) {
                     if (!"READ".equals(m.getStatus()) && m.getSender().equals(contact)) {
@@ -567,7 +746,7 @@ public class ChatClient extends JFrame {
                         }
                     }
                 }
-                saveData();
+                db.saveMessagesForUser(currentUser.username, currentUser.chatHistory);
             }
         }
 
@@ -575,20 +754,20 @@ public class ChatClient extends JFrame {
             JPanel panel = new JPanel(new BorderLayout());
             panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
             panel.setBackground(DARKER_BG);
-
+            String displayName = m.getSender().equals(currentUser.username) ? "You" : m.getSender();
             JLabel msgLabel;
             if (m.getType().equals("MSG")) {
-                msgLabel = new JLabel(m.getSender() + ": " + m.getContent());
+                msgLabel = new JLabel(displayName + ": " + m.getContent());
             } else if (m.getType().equals("FILE")) {
-                msgLabel = new JLabel(m.getSender() + " sent a file: " + m.getContent());
+                msgLabel = new JLabel(displayName + " sent a file: " + m.getContent());
             } else {
-                msgLabel = new JLabel(m.getSender() + ": " + m.getContent());
+                msgLabel = new JLabel(displayName + ": " + m.getContent());
             }
             msgLabel.setForeground(LIGHT_TEXT);
             panel.add(msgLabel, BorderLayout.CENTER);
 
             JLabel statusLabel = new JLabel();
-            statusLabel.setForeground(new Color(0, 255, 0)); // bright green ticks
+            statusLabel.setForeground(new Color(0, 255, 0));
             if (m.getSender().equals(currentUser.username)) {
                 switch (m.getStatus()) {
                     case "DELIVERED":
@@ -636,11 +815,12 @@ public class ChatClient extends JFrame {
                 int cnt = currentUser.unreadCounts.getOrDefault(contact, 0) + 1;
                 currentUser.unreadCounts.put(contact, cnt);
                 String snippet = m.getType().equals("FILE") ? "[File: " + m.getContent() + "]" : m.getContent();
-                if (snippet.length() > 20)
+                if (snippet.length() > 20) {
                     snippet = snippet.substring(0, 20) + "...";
+                }
                 currentUser.unreadSnippets.put(contact, snippet);
             }
-            saveData();
+            db.saveMessagesForUser(currentUser.username, currentUser.chatHistory);
         }
 
         public void updateConversation(String contact, String displayText) {
@@ -658,7 +838,7 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ========== NETWORK CLIENT ==========
+    // ------------- NETWORK CLIENT -------------
     private class NetworkClient implements Runnable {
         private Socket socket;
         private PrintWriter out;
@@ -671,7 +851,7 @@ public class ChatClient extends JFrame {
                 socket = new Socket(SERVER_ADDRESS, SERVER_PORT);
                 out = new PrintWriter(socket.getOutputStream(), true);
                 in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                out.println(username); // identify
+                out.println(username);
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(ChatClient.this, "Unable to connect to server: " + e.getMessage());
             }
@@ -766,31 +946,148 @@ public class ChatClient extends JFrame {
             try {
                 socket.close();
             } catch (IOException e) {
-                // ignore
             }
         }
     }
 
-    // Style text fields
-    private void styleTextField(JTextField field) {
-        field.setFont(FIELD_FONT);
-        field.setBackground(FIELD_BG);
-        field.setForeground(LIGHT_TEXT);
-        field.setCaretColor(LIGHT_TEXT);
-        field.setBorder(new LineBorder(ACCENT_COLOR, 1));
+    // ------------- SQL DATABASE HELPER -------------
+    private class SQLDatabase {
+        private Connection conn;
+
+        public SQLDatabase() {
+            try {
+                Class.forName("org.sqlite.JDBC");
+                conn = DriverManager.getConnection(DB_URL);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        public void initialize() {
+            String createUsers = "CREATE TABLE IF NOT EXISTS users (" +
+                    "username TEXT PRIMARY KEY, " +
+                    "name TEXT, " +
+                    "password TEXT, " +
+                    "profile_photo TEXT)";
+            String createMessages = "CREATE TABLE IF NOT EXISTS messages (" +
+                    "message_id TEXT PRIMARY KEY, " +
+                    "sender TEXT, " +
+                    "recipient TEXT, " +
+                    "content TEXT, " +
+                    "type TEXT, " +
+                    "file_data TEXT, " +
+                    "status TEXT, " +
+                    "timestamp INTEGER)";
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute(createUsers);
+                stmt.execute(createMessages);
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public Map<String, User> loadUsers() {
+            Map<String, User> userMap = new HashMap<>();
+            String query = "SELECT * FROM users";
+            try (Statement stmt = conn.createStatement();
+                    ResultSet rs = stmt.executeQuery(query)) {
+                while (rs.next()) {
+                    String username = rs.getString("username");
+                    String name = rs.getString("name");
+                    String password = rs.getString("password");
+                    String photo = rs.getString("profile_photo");
+                    User u = new User(name, username, password);
+                    u.profilePhotoBase64 = photo;
+                    userMap.put(username, u);
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+            return userMap;
+        }
+
+        public void saveUser(User u) {
+            String insert = "INSERT OR REPLACE INTO users(username, name, password, profile_photo) VALUES (?,?,?,?)";
+            try (PreparedStatement pstmt = conn.prepareStatement(insert)) {
+                pstmt.setString(1, u.username);
+                pstmt.setString(2, u.name);
+                pstmt.setString(3, u.password);
+                pstmt.setString(4, u.profilePhotoBase64);
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public void updateUser(User u) {
+            saveUser(u);
+        }
+
+        public void saveMessage(Message m) {
+            String insert = "INSERT OR REPLACE INTO messages(message_id, sender, recipient, content, type, file_data, status, timestamp) VALUES (?,?,?,?,?,?,?,?)";
+            try (PreparedStatement pstmt = conn.prepareStatement(insert)) {
+                pstmt.setString(1, m.getMessageId());
+                pstmt.setString(2, m.getSender());
+                pstmt.setString(3, m.getRecipient());
+                pstmt.setString(4, m.getContent());
+                pstmt.setString(5, m.getType());
+                pstmt.setString(6, m.getFileData());
+                pstmt.setString(7, m.getStatus());
+                pstmt.setLong(8, m.getTimestamp());
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public void saveMessagesForUser(String username, Map<String, List<Message>> chatHistory) {
+            String delete = "DELETE FROM messages WHERE sender = ? OR recipient = ?";
+            try (PreparedStatement pstmt = conn.prepareStatement(delete)) {
+                pstmt.setString(1, username);
+                pstmt.setString(2, username);
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+            for (List<Message> msgs : chatHistory.values()) {
+                for (Message m : msgs) {
+                    saveMessage(m);
+                }
+            }
+        }
+
+        public Map<String, List<Message>> loadMessagesForUser(String username) {
+            Map<String, List<Message>> history = new HashMap<>();
+            String query = "SELECT * FROM messages WHERE sender = ? OR recipient = ? ORDER BY timestamp ASC";
+            try (PreparedStatement pstmt = conn.prepareStatement(query)) {
+                pstmt.setString(1, username);
+                pstmt.setString(2, username);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        String msgId = rs.getString("message_id");
+                        String sender = rs.getString("sender");
+                        String recipient = rs.getString("recipient");
+                        String content = rs.getString("content");
+                        String type = rs.getString("type");
+                        String fileData = rs.getString("file_data");
+                        String status = rs.getString("status");
+                        long timestamp = rs.getLong("timestamp");
+                        Message m = new Message(msgId, sender, recipient, content, type, fileData);
+                        m.setStatus(status);
+                        m.setTimestamp(timestamp);
+                        String contact = sender.equals(username) ? recipient : sender;
+                        history.computeIfAbsent(contact, k -> new ArrayList<>()).add(m);
+                    }
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+            return history;
+        }
     }
 
-    // Style buttons: accent background, black text
-    private void styleButton(JButton button) {
-        button.setBackground(ACCENT_COLOR);
-        button.setForeground(BUTTON_TEXT);
-        button.setFont(BUTTON_FONT);
-        button.setFocusPainted(false);
-        button.setBorder(new LineBorder(Color.WHITE, 1));
-    }
-
+    // ------------- MAIN METHOD -------------
     public static void main(String[] args) {
-        // Optionally set system look & feel
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception e) {
