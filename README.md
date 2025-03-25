@@ -54,24 +54,22 @@ A modern Java Swing-based chat application featuring a dark mode user interface,
 2. Ensure the following files are in the same directory:
    - `ChatServer.java`
    - `ChatClient.java`
-   - `Message.java`
-   - (Optional) `chatapp_data.ser` if pre-existing data is available.
 
 3. **Compile the project:**
    Open a terminal in the project directory and run:
    ```bash
-   javac Message.java ChatServer.java ChatClient.java
+   javac -cp ".;lib\sqlite-jdbc-3.49.1.0.jar" ChatServer.java ChatClient.java
 
 Running the Application
 Start the Server
 Open a terminal and run:
 bash
-java ChatServer
+java -cp ".;lib\sqlite-jdbc-3.49.1.0.jar" ChatServer
 The server will start listening on port 12345.
 Start the Client
 In another terminal (or multiple terminals for multiple users), run:
 bash
-java ChatClient
+java -cp ".;lib\sqlite-jdbc-3.49.1.0.jar" ChatClient
 The client GUI will launch in dark mode.
 
 Usage
