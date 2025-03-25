@@ -63,13 +63,15 @@ A modern Java Swing-based chat application featuring a dark mode user interface,
 Running the Application
 Start the Server
 Open a terminal and run:
-bash
-java -cp ".;lib\sqlite-jdbc-3.49.1.0.jar" ChatServer
+```bash
+  java -cp ".;lib\sqlite-jdbc-3.49.1.0.jar" ChatServer
+```
 The server will start listening on port 12345.
 Start the Client
 In another terminal (or multiple terminals for multiple users), run:
-bash
-java -cp ".;lib\sqlite-jdbc-3.49.1.0.jar" ChatClient
+```bash
+  java -cp ".;lib\sqlite-jdbc-3.49.1.0.jar" ChatClient
+```
 The client GUI will launch in dark mode.
 
 Usage
