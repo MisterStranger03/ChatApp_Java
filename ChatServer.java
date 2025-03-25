@@ -19,7 +19,7 @@ public class ChatServer {
                 Socket socket = serverSocket.accept();
                 new Thread(new ClientHandler(socket)).start();
             }
-        } catch(IOException e) {
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
@@ -29,26 +29,28 @@ public class ChatServer {
         private PrintWriter out;
         private BufferedReader in;
         private String username;
-        
+
         public ClientHandler(Socket socket) {
             this.socket = socket;
         }
-        
+
         public void run() {
             try {
                 out = new PrintWriter(socket.getOutputStream(), true);
                 in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 // First message is the username for identification.
                 username = in.readLine();
-                if (username == null) return;
+                if (username == null)
+                    return;
                 clients.put(username, this);
                 System.out.println(username + " connected.");
-                
+
                 String message;
                 while ((message = in.readLine()) != null) {
                     // Protocol: TYPE|messageId|sender|recipient|content|[optional fileData]
                     String[] parts = message.split("\\|", 6);
-                    if (parts.length < 1) continue;
+                    if (parts.length < 1)
+                        continue;
                     String type = parts[0];
                     if (type.equals("MSG") || type.equals("FILE")) {
                         String msgId = parts[1];
@@ -79,14 +81,17 @@ public class ChatServer {
                         }
                     }
                 }
-            } catch(IOException e) {
+            } catch (IOException e) {
                 e.printStackTrace();
             } finally {
                 if (username != null) {
                     clients.remove(username);
                     System.out.println(username + " disconnected.");
                 }
-                try { socket.close(); } catch(IOException e) {}
+                try {
+                    socket.close();
+                } catch (IOException e) {
+                }
             }
         }
     }
