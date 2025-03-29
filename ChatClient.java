@@ -1,12 +1,17 @@
 import com.formdev.flatlaf.FlatDarkLaf;
+import org.pushingpixels.trident.Timeline;
 import javax.swing.*;
+import javax.swing.border.AbstractBorder;
+import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
 import java.awt.*;
 import java.awt.event.*;
+import java.awt.geom.RoundRectangle2D;
 import java.io.*;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.sql.*;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.List;
 import java.util.Base64;
@@ -15,13 +20,14 @@ import java.util.concurrent.atomic.AtomicLong;
 public class ChatClient extends JFrame {
 
     // ------------- Color and Font Constants -------------
-    private static final Color DARK_BG       = new Color(35, 35, 35);
-    private static final Color DARKER_BG     = new Color(25, 25, 25);
+    private static final Color DARK_BG       = new Color(30, 30, 30);
+    private static final Color DARKER_BG     = new Color(20, 20, 20);
     private static final Color LIGHT_TEXT    = new Color(220, 220, 220);
     private static final Color ACCENT_COLOR  = new Color(100, 255, 218);
-    private static final Color BUTTON_BG     = new Color(100, 255, 218);
-    private static final Color BUTTON_TEXT   = Color.BLACK;
+    private static final Color BUTTON_BG     = new Color(80, 180, 255);
+    private static final Color BUTTON_TEXT   = Color.WHITE;
     private static final Color FIELD_BG      = new Color(60, 60, 60);
+    private static final Color DATE_BG       = new Color(80, 80, 80); // For date headers
 
     private static final Font TITLE_FONT  = new Font("SansSerif", Font.BOLD, 36);
     private static final Font LABEL_FONT  = new Font("SansSerif", Font.BOLD, 16);
@@ -46,7 +52,6 @@ public class ChatClient extends JFrame {
             this.name = name;
             this.username = username;
             this.password = password;
-            this.profilePhotoBase64 = null;
         }
     }
 
@@ -104,33 +109,52 @@ public class ChatClient extends JFrame {
 
     // ------------- Constructor -------------
     public ChatClient() {
-        setTitle("Dark Mode Chat App - Chat Client");
+        setTitle("Dark Mode Chat App");
         setSize(1000, 700);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
-
         db = new SQLDatabase();
         db.initialize();
         users = db.loadUsers();
-
         cardLayout = new CardLayout();
         mainPanel = new JPanel(cardLayout);
         mainPanel.setBackground(DARK_BG);
-
         mainPanel.add(new LoginPanel(), "login");
         mainPanel.add(new RegistrationPanel(), "register");
         chatMainPanel = new ChatMainPanel();
         mainPanel.add(chatMainPanel, "chat");
         profilePanel = new ProfilePanel();
         mainPanel.add(profilePanel, "profile");
-
         add(mainPanel);
         cardLayout.show(mainPanel, "login");
     }
 
-    // ------------- Utility Methods -------------
-    private void showLoader(String message) {
-        // Retained for profile updates and registration; auto-refresh does not show loader.
+    // ------------- Helper Methods -------------
+    public void styleTextField(JTextField field) {
+        field.setFont(FIELD_FONT);
+        field.setBackground(FIELD_BG);
+        field.setForeground(LIGHT_TEXT);
+        field.setCaretColor(LIGHT_TEXT);
+        field.setBorder(new LineBorder(ACCENT_COLOR, 1));
+    }
+
+    public void styleTextField(JPasswordField field) {
+        field.setFont(FIELD_FONT);
+        field.setBackground(FIELD_BG);
+        field.setForeground(LIGHT_TEXT);
+        field.setCaretColor(LIGHT_TEXT);
+        field.setBorder(new LineBorder(ACCENT_COLOR, 1));
+    }
+
+    public void styleButton(JButton button) {
+        button.setFont(BUTTON_FONT);
+        button.setBackground(BUTTON_BG);
+        button.setForeground(BUTTON_TEXT);
+        button.setFocusPainted(false);
+        button.setBorder(new RoundedBorder(10));
+    }
+
+    public void showLoader(String message) {
         JDialog loader = new JDialog(this, "Loading", true);
         loader.setSize(300, 100);
         loader.setLocationRelativeTo(this);
@@ -146,73 +170,167 @@ public class ChatClient extends JFrame {
         loader.setVisible(true);
     }
 
-    private void styleTextField(JTextField field) {
-        field.setFont(FIELD_FONT);
-        field.setBackground(FIELD_BG);
-        field.setForeground(LIGHT_TEXT);
-        field.setCaretColor(LIGHT_TEXT);
-        field.setBorder(new LineBorder(ACCENT_COLOR, 1));
+    // Helper to scroll a JScrollPane to bottom
+    public void scrollToBottom(JScrollPane scrollPane) {
+        SwingUtilities.invokeLater(() -> {
+            JScrollBar verticalBar = scrollPane.getVerticalScrollBar();
+            verticalBar.setValue(verticalBar.getMaximum());
+        });
     }
 
-    private void styleButton(JButton button) {
-        button.setBackground(BUTTON_BG);
-        button.setForeground(BUTTON_TEXT);
-        button.setFont(BUTTON_FONT);
-        button.setFocusPainted(false);
-        button.setBorder(new LineBorder(Color.WHITE, 1));
+    // ------------- Custom RoundedBorder -------------
+    public class RoundedBorder extends AbstractBorder {
+        private int radius;
+        public RoundedBorder(int radius) {
+            this.radius = radius;
+        }
+        @Override
+        public void paintBorder(Component c, Graphics g, int x, int y, int width, int height) {
+            Graphics2D g2 = (Graphics2D) g;
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(c.getForeground());
+            g2.drawRoundRect(x, y, width - 1, height - 1, radius, radius);
+        }
+        @Override
+        public Insets getBorderInsets(Component c) {
+            return new Insets(radius+1, radius+1, radius+1, radius+1);
+        }
+        @Override
+        public Insets getBorderInsets(Component c, Insets insets) {
+            insets.left = insets.top = insets.right = insets.bottom = radius+1;
+            return insets;
+        }
     }
 
-    // ------------- LOGIN PANEL -------------
+    // ------------- ChatBubble Component -------------
+    // Fixed size chat bubbles with a fixed dimension and a message time.
+    public class ChatBubble extends JPanel {
+        private String message;
+        private String timeText;
+        private Color bubbleColor;
+        private float alpha = 0f;
+        private int offset; // For slide animation
+
+        public ChatBubble(String message, long timestamp, Color bubbleColor, boolean isSelf) {
+            this.message = message;
+            this.bubbleColor = bubbleColor;
+            SimpleDateFormat sdf = new SimpleDateFormat("hh:mm a");
+            this.timeText = sdf.format(new java.util.Date(timestamp));
+            this.offset = isSelf ? 50 : -50;
+            setOpaque(false);
+            // Fixed size bubble, e.g., 300 x 60
+            setPreferredSize(new Dimension(300, 60));
+            setBorder(new EmptyBorder(8, 12, 20, 12));
+        }
+
+        public void setAlpha(float alpha) {
+            this.alpha = alpha;
+            repaint();
+        }
+
+        public void setOffset(int offset) {
+            this.offset = offset;
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.translate(offset, 0);
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            int arc = 20;
+            int width = getWidth() - Math.abs(offset);
+            int height = getHeight();
+            g2.setColor(bubbleColor);
+            g2.fillRoundRect(0, 0, width, height, arc, arc);
+            g2.setColor(getForeground());
+            g2.setFont(getFont());
+            FontMetrics fm = g2.getFontMetrics();
+            int textY = fm.getAscent() + 5;
+            String drawMsg = message; // We assume message fits; if not, we could truncate
+            g2.drawString(drawMsg, 10, textY);
+            Font timeFont = getFont().deriveFont(Font.ITALIC, 10f);
+            g2.setFont(timeFont);
+            FontMetrics tfm = g2.getFontMetrics(timeFont);
+            int timeWidth = tfm.stringWidth(timeText);
+            int timeY = height - 5;
+            g2.drawString(timeText, width - timeWidth - 10, timeY);
+            g2.dispose();
+        }
+    }
+
+    // ------------- DateHeader Component -------------
+    // A small header bubble to display date above messages.
+    public class DateHeader extends JPanel {
+        private String dateText;
+        public DateHeader(String dateText) {
+            this.dateText = dateText;
+            setOpaque(false);
+            setPreferredSize(new Dimension(300, 30));
+        }
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            int arc = 15;
+            int width = getWidth();
+            int height = getHeight();
+            g2.setColor(DATE_BG);
+            g2.fillRoundRect(0, 0, width, height, arc, arc);
+            g2.setColor(LIGHT_TEXT);
+            Font font = new Font("SansSerif", Font.PLAIN, 10);
+            g2.setFont(font);
+            FontMetrics fm = g2.getFontMetrics();
+            int textWidth = fm.stringWidth(dateText);
+            int textX = (width - textWidth) / 2;
+            int textY = (height - fm.getHeight()) / 2 + fm.getAscent();
+            g2.drawString(dateText, textX, textY);
+            g2.dispose();
+        }
+    }
+
+    // ------------- LoginPanel -------------
     private class LoginPanel extends JPanel {
         public LoginPanel() {
             setBackground(DARK_BG);
             setLayout(new BorderLayout());
-
-            JLabel title = new JLabel("Login", SwingConstants.CENTER);
+            JLabel title = new JLabel("Welcome Back", SwingConstants.CENTER);
             title.setFont(TITLE_FONT);
             title.setForeground(ACCENT_COLOR);
             add(title, BorderLayout.NORTH);
-
             JPanel formPanel = new JPanel(new GridBagLayout());
             formPanel.setBackground(DARK_BG);
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(10, 10, 10, 10);
             gbc.fill = GridBagConstraints.HORIZONTAL;
-
             gbc.gridx = 0; gbc.gridy = 0;
             JLabel userLabel = new JLabel("Username:");
             userLabel.setFont(LABEL_FONT);
             userLabel.setForeground(LIGHT_TEXT);
             formPanel.add(userLabel, gbc);
-
             gbc.gridx = 1;
             JTextField usernameField = new JTextField(20);
-            styleTextField(usernameField);
+            ChatClient.this.styleTextField(usernameField);
             formPanel.add(usernameField, gbc);
-
             gbc.gridx = 0; gbc.gridy = 1;
             JLabel passLabel = new JLabel("Password:");
             passLabel.setFont(LABEL_FONT);
             passLabel.setForeground(LIGHT_TEXT);
             formPanel.add(passLabel, gbc);
-
             gbc.gridx = 1;
             JPasswordField passwordField = new JPasswordField(20);
-            styleTextField(passwordField);
+            ChatClient.this.styleTextField(passwordField);
             formPanel.add(passwordField, gbc);
-
             gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2;
             JButton loginButton = new JButton("LOGIN");
-            styleButton(loginButton);
+            ChatClient.this.styleButton(loginButton);
             formPanel.add(loginButton, gbc);
-
             gbc.gridy = 3;
             JButton toRegisterButton = new JButton("REGISTER");
-            styleButton(toRegisterButton);
+            ChatClient.this.styleButton(toRegisterButton);
             formPanel.add(toRegisterButton, gbc);
-
             add(formPanel, BorderLayout.CENTER);
-
             loginButton.addActionListener(e -> {
                 String username = usernameField.getText().trim();
                 String password = new String(passwordField.getPassword());
@@ -223,7 +341,7 @@ public class ChatClient extends JFrame {
                 if (users.containsKey(username)) {
                     User user = users.get(username);
                     if (user.password.equals(password)) {
-                        showLoader("Logging in...");
+                        ChatClient.this.showLoader("Logging in...");
                         currentUser = user;
                         currentUser.chatHistory = db.loadMessagesForUser(currentUser.username);
                         chatMainPanel.refreshContacts();
@@ -238,76 +356,63 @@ public class ChatClient extends JFrame {
                     JOptionPane.showMessageDialog(this, "User not found.", "Error", JOptionPane.ERROR_MESSAGE);
                 }
             });
-
             toRegisterButton.addActionListener(e -> {
-                showLoader("Opening Registration...");
+                ChatClient.this.showLoader("Opening Registration...");
                 cardLayout.show(mainPanel, "register");
             });
         }
     }
 
-    // ------------- REGISTRATION PANEL -------------
+    // ------------- RegistrationPanel -------------
     private class RegistrationPanel extends JPanel {
         public RegistrationPanel() {
             setBackground(DARK_BG);
             setLayout(new BorderLayout());
-
-            JLabel title = new JLabel("Register", SwingConstants.CENTER);
+            JLabel title = new JLabel("Create Account", SwingConstants.CENTER);
             title.setFont(TITLE_FONT);
             title.setForeground(new Color(200, 100, 255));
             add(title, BorderLayout.NORTH);
-
             JPanel formPanel = new JPanel(new GridBagLayout());
             formPanel.setBackground(DARK_BG);
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(10, 10, 10, 10);
             gbc.fill = GridBagConstraints.HORIZONTAL;
-
             gbc.gridx = 0; gbc.gridy = 0;
             JLabel nameLabel = new JLabel("Name:");
             nameLabel.setFont(LABEL_FONT);
             nameLabel.setForeground(LIGHT_TEXT);
             formPanel.add(nameLabel, gbc);
-
             gbc.gridx = 1;
             JTextField nameField = new JTextField(20);
-            styleTextField(nameField);
+            ChatClient.this.styleTextField(nameField);
             formPanel.add(nameField, gbc);
-
             gbc.gridx = 0; gbc.gridy = 1;
             JLabel userLabel = new JLabel("Username:");
             userLabel.setFont(LABEL_FONT);
             userLabel.setForeground(LIGHT_TEXT);
             formPanel.add(userLabel, gbc);
-
             gbc.gridx = 1;
             JTextField usernameField = new JTextField(20);
-            styleTextField(usernameField);
+            ChatClient.this.styleTextField(usernameField);
             formPanel.add(usernameField, gbc);
-
             gbc.gridx = 0; gbc.gridy = 2;
             JLabel passLabel = new JLabel("Password:");
             passLabel.setFont(LABEL_FONT);
             passLabel.setForeground(LIGHT_TEXT);
             formPanel.add(passLabel, gbc);
-
             gbc.gridx = 1;
             JPasswordField passwordField = new JPasswordField(20);
-            styleTextField(passwordField);
+            ChatClient.this.styleTextField(passwordField);
             formPanel.add(passwordField, gbc);
-
             gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 2;
             JButton registerButton = new JButton("REGISTER");
-            styleButton(registerButton);
+            ChatClient.this.styleButton(registerButton);
             formPanel.add(registerButton, gbc);
-
             gbc.gridy = 4;
             JButton backToLoginButton = new JButton("BACK TO LOGIN");
-            styleButton(backToLoginButton);
+            ChatClient.this.styleButton(backToLoginButton);
             formPanel.add(backToLoginButton, gbc);
-
             add(formPanel, BorderLayout.CENTER);
-
             registerButton.addActionListener(e -> {
                 String name = nameField.getText().trim();
                 String username = usernameField.getText().trim();
@@ -323,19 +428,18 @@ public class ChatClient extends JFrame {
                 User newUser = new User(name, username, password);
                 users.put(username, newUser);
                 db.saveUser(newUser);
-                showLoader("Registering...");
+                ChatClient.this.showLoader("Registering...");
                 JOptionPane.showMessageDialog(this, "Registration successful! Please login.", "Success", JOptionPane.INFORMATION_MESSAGE);
                 cardLayout.show(mainPanel, "login");
             });
-
             backToLoginButton.addActionListener(e -> {
-                showLoader("Going back to Login...");
+                ChatClient.this.showLoader("Going back to Login...");
                 cardLayout.show(mainPanel, "login");
             });
         }
     }
 
-    // ------------- PROFILE PANEL -------------
+    // ------------- ProfilePanel -------------
     private class ProfilePanel extends JPanel {
         private JLabel photoLabel;
         private JTextField nameField, usernameField;
@@ -344,18 +448,15 @@ public class ChatClient extends JFrame {
         public ProfilePanel() {
             setLayout(new BorderLayout());
             setBackground(DARK_BG);
-
             JLabel title = new JLabel("Profile Settings", SwingConstants.CENTER);
             title.setFont(TITLE_FONT);
             title.setForeground(new Color(255, 200, 100));
             add(title, BorderLayout.NORTH);
-
             JPanel formPanel = new JPanel(new GridBagLayout());
             formPanel.setBackground(DARK_BG);
             GridBagConstraints gbc = new GridBagConstraints();
-            gbc.insets = new Insets(10,10,10,10);
+            gbc.insets = new Insets(10, 10, 10, 10);
             gbc.fill = GridBagConstraints.HORIZONTAL;
-
             gbc.gridx = 0; gbc.gridy = 0;
             JLabel nameLabel = new JLabel("Name:");
             nameLabel.setFont(LABEL_FONT);
@@ -363,9 +464,8 @@ public class ChatClient extends JFrame {
             formPanel.add(nameLabel, gbc);
             gbc.gridx = 1;
             nameField = new JTextField(20);
-            styleTextField(nameField);
+            ChatClient.this.styleTextField(nameField);
             formPanel.add(nameField, gbc);
-
             gbc.gridx = 0; gbc.gridy = 1;
             JLabel userLabel = new JLabel("Username:");
             userLabel.setFont(LABEL_FONT);
@@ -373,9 +473,8 @@ public class ChatClient extends JFrame {
             formPanel.add(userLabel, gbc);
             gbc.gridx = 1;
             usernameField = new JTextField(20);
-            styleTextField(usernameField);
+            ChatClient.this.styleTextField(usernameField);
             formPanel.add(usernameField, gbc);
-
             gbc.gridx = 0; gbc.gridy = 2;
             JLabel passLabel = new JLabel("Password:");
             passLabel.setFont(LABEL_FONT);
@@ -383,9 +482,8 @@ public class ChatClient extends JFrame {
             formPanel.add(passLabel, gbc);
             gbc.gridx = 1;
             passwordField = new JPasswordField(20);
-            styleTextField(passwordField);
+            ChatClient.this.styleTextField(passwordField);
             formPanel.add(passwordField, gbc);
-
             gbc.gridx = 0; gbc.gridy = 3;
             JLabel photoTextLabel = new JLabel("Profile Photo:");
             photoTextLabel.setFont(LABEL_FONT);
@@ -397,19 +495,15 @@ public class ChatClient extends JFrame {
             photoLabel.setOpaque(true);
             photoLabel.setBackground(FIELD_BG);
             formPanel.add(photoLabel, gbc);
-
             gbc.gridx = 1; gbc.gridy = 4;
             loadPhotoButton = new JButton("Load Photo");
-            styleButton(loadPhotoButton);
+            ChatClient.this.styleButton(loadPhotoButton);
             formPanel.add(loadPhotoButton, gbc);
-
             gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 2;
             saveButton = new JButton("SAVE CHANGES");
-            styleButton(saveButton);
+            ChatClient.this.styleButton(saveButton);
             formPanel.add(saveButton, gbc);
-
             add(formPanel, BorderLayout.CENTER);
-
             loadPhotoButton.addActionListener(e -> {
                 JFileChooser fc = new JFileChooser();
                 int res = fc.showOpenDialog(ProfilePanel.this);
@@ -427,11 +521,10 @@ public class ChatClient extends JFrame {
                     }
                 }
             });
-
             saveButton.addActionListener(e -> {
                 if (currentUser == null)
                     return;
-                showLoader("Saving Profile...");
+                ChatClient.this.showLoader("Saving Profile...");
                 currentUser.name = nameField.getText().trim();
                 currentUser.username = usernameField.getText().trim();
                 currentUser.password = new String(passwordField.getPassword());
@@ -441,7 +534,6 @@ public class ChatClient extends JFrame {
                 cardLayout.show(mainPanel, "chat");
             });
         }
-
         public void loadProfileData() {
             if (currentUser != null) {
                 nameField.setText(currentUser.name);
@@ -459,33 +551,29 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- MAIN CHAT PANEL -------------
+    // ------------- ChatMainPanel -------------
     private class ChatMainPanel extends JPanel {
         private DefaultListModel<String> contactsModel;
         private JList<String> contactsList;
         private JPanel chatSessionPanel;
         private JLabel headerLabel;
-        // currentChatContact stores either an individual username or "Group: groupName"
         private String currentChatContact = null;
         private JPanel conversationPanel;
 
         public ChatMainPanel() {
             setLayout(new BorderLayout());
             setBackground(DARK_BG);
-
             JPanel headerPanel = new JPanel(new BorderLayout());
             headerPanel.setBackground(DARKER_BG);
-            headerPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-
+            headerPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
             headerLabel = new JLabel("Welcome, ...", SwingConstants.LEFT);
             headerLabel.setFont(TITLE_FONT);
             headerLabel.setForeground(ACCENT_COLOR);
             headerPanel.add(headerLabel, BorderLayout.WEST);
-
             JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
             rightPanel.setOpaque(false);
             JButton refreshChatButton = new JButton("REFRESH CHAT");
-            styleButton(refreshChatButton);
+            ChatClient.this.styleButton(refreshChatButton);
             refreshChatButton.addActionListener(e -> {
                 users = db.loadUsers();
                 refreshContacts();
@@ -493,7 +581,7 @@ public class ChatClient extends JFrame {
                 JOptionPane.showMessageDialog(ChatMainPanel.this, "Chats Refreshed!");
             });
             JButton profileButton = new JButton("PROFILE");
-            styleButton(profileButton);
+            ChatClient.this.styleButton(profileButton);
             profileButton.addActionListener(e -> {
                 if (currentUser != null) {
                     profilePanel.loadProfileData();
@@ -501,7 +589,7 @@ public class ChatClient extends JFrame {
                 }
             });
             JButton logoutButton = new JButton("LOGOUT");
-            styleButton(logoutButton);
+            ChatClient.this.styleButton(logoutButton);
             logoutButton.addActionListener(e -> {
                 if (networkClient != null)
                     networkClient.close();
@@ -513,7 +601,6 @@ public class ChatClient extends JFrame {
             rightPanel.add(logoutButton);
             headerPanel.add(rightPanel, BorderLayout.EAST);
             add(headerPanel, BorderLayout.NORTH);
-
             contactsModel = new DefaultListModel<>();
             contactsList = new JList<>(contactsModel);
             contactsList.setBackground(DARKER_BG);
@@ -523,19 +610,15 @@ public class ChatClient extends JFrame {
             contactsScroll.setPreferredSize(new Dimension(250, 0));
             contactsScroll.setBorder(BorderFactory.createTitledBorder(new LineBorder(ACCENT_COLOR), "Contacts"));
             contactsScroll.getViewport().setBackground(DARKER_BG);
-
             JButton createGroupButton = new JButton("Create Group");
-            styleButton(createGroupButton);
+            ChatClient.this.styleButton(createGroupButton);
             createGroupButton.addActionListener(e -> openCreateGroupDialog());
-
             JPanel leftPanel = new JPanel(new BorderLayout());
             leftPanel.add(createGroupButton, BorderLayout.NORTH);
             leftPanel.add(contactsScroll, BorderLayout.CENTER);
-
             chatSessionPanel = new JPanel(new BorderLayout());
             chatSessionPanel.setBackground(DARKER_BG);
             chatSessionPanel.setBorder(BorderFactory.createTitledBorder(new LineBorder(ACCENT_COLOR), "Conversation"));
-
             contactsList.addMouseListener(new MouseAdapter() {
                 @Override
                 public void mouseClicked(MouseEvent e) {
@@ -553,12 +636,9 @@ public class ChatClient extends JFrame {
                     }
                 }
             });
-
             JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPanel, chatSessionPanel);
             splitPane.setDividerLocation(250);
             add(splitPane, BorderLayout.CENTER);
-
-            // Auto-refresh chats every 5 seconds without loading screens
             new javax.swing.Timer(5000, e -> {
                 users = db.loadUsers();
                 refreshContacts();
@@ -571,7 +651,6 @@ public class ChatClient extends JFrame {
                 return;
             headerLabel.setText("Welcome, " + currentUser.name);
             contactsModel.clear();
-            // Add individual contacts
             for (String uname : users.keySet()) {
                 if (!uname.equals(currentUser.username)) {
                     int unread = currentUser.unreadCounts.getOrDefault(uname, 0);
@@ -586,14 +665,13 @@ public class ChatClient extends JFrame {
                     contactsModel.addElement(display);
                 }
             }
-            // Add groups from local mapping
             for (String groupName : groups.keySet()) {
                 contactsModel.addElement("Group: " + groupName);
             }
         }
 
         public void refreshChatHistory() {
-            // Optionally, update conversation panels if needed.
+            // Optionally update conversation panel
         }
 
         public void openIndividualChatSession(String contact) {
@@ -601,35 +679,51 @@ public class ChatClient extends JFrame {
             currentUser.unreadCounts.put(contact, 0);
             currentUser.unreadSnippets.remove(contact);
             refreshContacts();
-
             chatSessionPanel.removeAll();
             chatSessionPanel.setLayout(new BorderLayout());
-
             conversationPanel = new JPanel();
             conversationPanel.setLayout(new BoxLayout(conversationPanel, BoxLayout.Y_AXIS));
             conversationPanel.setBackground(DARK_BG);
             JScrollPane convScroll = new JScrollPane(conversationPanel);
             convScroll.setBorder(null);
             convScroll.getViewport().setBackground(DARK_BG);
-
             List<Message> history = currentUser.chatHistory.get(contact);
+            String lastDate = null;
             if (history != null) {
                 for (Message m : history) {
+                    String msgDate = new SimpleDateFormat("MMM dd, yyyy").format(new java.util.Date(m.getTimestamp()));
+                    if (lastDate == null || !lastDate.equals(msgDate)) {
+                        conversationPanel.add(new DateHeader(msgDate));
+                        lastDate = msgDate;
+                    }
                     conversationPanel.add(createMessagePanel(m));
                 }
             }
-
             JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
             inputPanel.setBackground(DARKER_BG);
             JTextField inputField = new JTextField(30);
-            styleTextField(inputField);
+            ChatClient.this.styleTextField(inputField);
             JButton sendMsgButton = new JButton("Send");
-            styleButton(sendMsgButton);
+            ChatClient.this.styleButton(sendMsgButton);
             JButton sendFileButton = new JButton("Send File");
-            styleButton(sendFileButton);
+            ChatClient.this.styleButton(sendFileButton);
             JButton closeChatButton = new JButton("Close Chat");
-            styleButton(closeChatButton);
-
+            ChatClient.this.styleButton(closeChatButton);
+            // Map Enter key to send and Esc to close
+            inputField.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke("ENTER"), "sendMsg");
+            inputField.getActionMap().put("sendMsg", new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    sendMsgButton.doClick();
+                }
+            });
+            inputField.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke("ESCAPE"), "closeChat");
+            inputField.getActionMap().put("closeChat", new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    closeChatButton.doClick();
+                }
+            });
             sendMsgButton.addActionListener(e -> {
                 String msgText = inputField.getText().trim();
                 if (!msgText.isEmpty()) {
@@ -637,6 +731,16 @@ public class ChatClient extends JFrame {
                     Message msg = new Message(msgId, currentUser.username, contact, msgText, "MSG", null);
                     msg.setStatus("PENDING");
                     addMessageToHistory(contact, msg);
+                    String msgDate = new SimpleDateFormat("MMM dd, yyyy").format(new java.util.Date(msg.getTimestamp()));
+                    Component last = conversationPanel.getComponentCount() > 0 ?
+                            conversationPanel.getComponent(conversationPanel.getComponentCount() - 1) : null;
+                    String lastHeader = null;
+                    if (last instanceof DateHeader) {
+                        lastHeader = ((DateHeader) last).dateText;
+                    }
+                    if (lastHeader == null || !lastHeader.equals(msgDate)) {
+                        conversationPanel.add(new DateHeader(msgDate));
+                    }
                     conversationPanel.add(createMessagePanel(msg));
                     conversationPanel.revalidate();
                     conversationPanel.repaint();
@@ -644,9 +748,9 @@ public class ChatClient extends JFrame {
                     if (networkClient != null) {
                         networkClient.sendMessage(contact, "MSG|" + msgId + "|" + currentUser.username + "|" + contact + "|" + msgText);
                     }
+                    scrollToBottom(convScroll);
                 }
             });
-
             sendFileButton.addActionListener(e -> {
                 JFileChooser fc = new JFileChooser();
                 int res = fc.showOpenDialog(chatSessionPanel);
@@ -665,29 +769,26 @@ public class ChatClient extends JFrame {
                         if (networkClient != null) {
                             networkClient.sendMessage(contact, "FILE|" + msgId + "|" + currentUser.username + "|" + contact + "|" + file.getName() + "|" + base64Encoded);
                         }
+                        scrollToBottom(convScroll);
                     } catch (IOException ex) {
                         JOptionPane.showMessageDialog(chatSessionPanel, "Error reading file: " + ex.getMessage());
                     }
                 }
             });
-
             closeChatButton.addActionListener(e -> {
                 chatSessionPanel.removeAll();
                 chatSessionPanel.revalidate();
                 chatSessionPanel.repaint();
                 currentChatContact = null;
             });
-
             inputPanel.add(inputField);
             inputPanel.add(sendMsgButton);
             inputPanel.add(sendFileButton);
             inputPanel.add(closeChatButton);
-
             chatSessionPanel.add(convScroll, BorderLayout.CENTER);
             chatSessionPanel.add(inputPanel, BorderLayout.SOUTH);
             chatSessionPanel.revalidate();
             chatSessionPanel.repaint();
-
             if (currentUser.chatHistory.containsKey(contact)) {
                 for (Message m : currentUser.chatHistory.get(contact)) {
                     if (!"READ".equals(m.getStatus()) && m.getSender().equals(contact)) {
@@ -699,21 +800,19 @@ public class ChatClient extends JFrame {
                 }
                 db.saveMessagesForUser(currentUser.username, currentUser.chatHistory);
             }
+            scrollToBottom(convScroll);
         }
 
         public void openGroupChatSession(String groupName) {
             currentChatContact = "Group: " + groupName;
             chatSessionPanel.removeAll();
             chatSessionPanel.setLayout(new BorderLayout());
-
-            // Group header with popup menu for options
             JPanel groupHeader = new JPanel(new BorderLayout());
             groupHeader.setBackground(DARKER_BG);
             JLabel groupLabel = new JLabel("Group: " + groupName);
             groupLabel.setFont(TITLE_FONT);
             groupLabel.setForeground(ACCENT_COLOR);
             groupHeader.add(groupLabel, BorderLayout.WEST);
-
             groupLabel.addMouseListener(new MouseAdapter() {
                 @Override
                 public void mouseClicked(MouseEvent e) {
@@ -722,7 +821,6 @@ public class ChatClient extends JFrame {
                     JMenuItem changeNameItem = new JMenuItem("Change Group Name");
                     JMenuItem showMembersItem = new JMenuItem("Show Members");
                     JMenuItem addUserItem = new JMenuItem("Add User");
-
                     leaveItem.addActionListener(ae -> {
                         if (networkClient != null) {
                             networkClient.sendMessage("", "LEAVE_GROUP|" + groupName + "|" + currentUser.username);
@@ -735,7 +833,6 @@ public class ChatClient extends JFrame {
                             refreshContacts();
                         }
                     });
-
                     changeNameItem.addActionListener(ae -> {
                         String newName = JOptionPane.showInputDialog(ChatMainPanel.this, "Enter new group name:");
                         if (newName != null && !newName.trim().isEmpty() && networkClient != null) {
@@ -747,7 +844,6 @@ public class ChatClient extends JFrame {
                             refreshContacts();
                         }
                     });
-
                     showMembersItem.addActionListener(ae -> {
                         if (networkClient != null) {
                             networkClient.sendMessage("", "GROUP_INFO|" + groupName);
@@ -761,8 +857,6 @@ public class ChatClient extends JFrame {
                             }
                         });
                     });
-
-                    // "Add User" now shows checkboxes for remaining available users
                     addUserItem.addActionListener(ae -> {
                         Set<String> currentMembers = groups.get(groupName);
                         List<String> availableUsers = new ArrayList<>();
@@ -794,7 +888,6 @@ public class ChatClient extends JFrame {
                             }
                         }
                     });
-
                     menu.add(leaveItem);
                     menu.add(changeNameItem);
                     menu.add(showMembersItem);
@@ -802,34 +895,50 @@ public class ChatClient extends JFrame {
                     menu.show(groupLabel, e.getX(), e.getY());
                 }
             });
-
             chatSessionPanel.add(groupHeader, BorderLayout.NORTH);
-
             conversationPanel = new JPanel();
             conversationPanel.setLayout(new BoxLayout(conversationPanel, BoxLayout.Y_AXIS));
             conversationPanel.setBackground(DARK_BG);
             JScrollPane convScroll = new JScrollPane(conversationPanel);
             convScroll.setBorder(null);
             convScroll.getViewport().setBackground(DARK_BG);
-
             List<Message> history = currentUser.chatHistory.get("Group:" + groupName);
+            String lastDate = null;
             if (history != null) {
                 for (Message m : history) {
+                    String msgDate = new SimpleDateFormat("MMM dd, yyyy").format(new java.util.Date(m.getTimestamp()));
+                    if (lastDate == null || !lastDate.equals(msgDate)) {
+                        conversationPanel.add(new DateHeader(msgDate));
+                        lastDate = msgDate;
+                    }
                     conversationPanel.add(createMessagePanel(m));
                 }
             }
-
             JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
-            inputPanel.setBackground(DARKER_BG);
+            inputPanel.setBackground(DARK_BG);
             JTextField inputField = new JTextField(30);
-            styleTextField(inputField);
+            ChatClient.this.styleTextField(inputField);
             JButton sendMsgButton = new JButton("Send");
-            styleButton(sendMsgButton);
+            ChatClient.this.styleButton(sendMsgButton);
             JButton sendFileButton = new JButton("Send File");
-            styleButton(sendFileButton);
+            ChatClient.this.styleButton(sendFileButton);
             JButton closeChatButton = new JButton("Close Chat");
-            styleButton(closeChatButton);
-
+            ChatClient.this.styleButton(closeChatButton);
+            // Map Enter key and Esc key similarly
+            inputField.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke("ENTER"), "sendMsg");
+            inputField.getActionMap().put("sendMsg", new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    sendMsgButton.doClick();
+                }
+            });
+            inputField.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke("ESCAPE"), "closeChat");
+            inputField.getActionMap().put("closeChat", new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    closeChatButton.doClick();
+                }
+            });
             sendMsgButton.addActionListener(e -> {
                 String msgText = inputField.getText().trim();
                 if (!msgText.isEmpty()) {
@@ -837,6 +946,16 @@ public class ChatClient extends JFrame {
                     Message msg = new Message(msgId, currentUser.username, groupName, msgText, "GROUP_MSG", null);
                     msg.setStatus("PENDING");
                     addMessageToHistory("Group:" + groupName, msg);
+                    String msgDate = new SimpleDateFormat("MMM dd, yyyy").format(new java.util.Date(msg.getTimestamp()));
+                    Component last = conversationPanel.getComponentCount() > 0 ?
+                            conversationPanel.getComponent(conversationPanel.getComponentCount() - 1) : null;
+                    String lastHeader = null;
+                    if (last instanceof DateHeader) {
+                        lastHeader = ((DateHeader) last).dateText;
+                    }
+                    if (lastHeader == null || !lastHeader.equals(msgDate)) {
+                        conversationPanel.add(new DateHeader(msgDate));
+                    }
                     conversationPanel.add(createMessagePanel(msg));
                     conversationPanel.revalidate();
                     conversationPanel.repaint();
@@ -844,9 +963,9 @@ public class ChatClient extends JFrame {
                     if (networkClient != null) {
                         networkClient.sendMessage("", "GROUP_MSG|" + msgId + "|" + currentUser.username + "|" + groupName + "|" + msgText);
                     }
+                    scrollToBottom(convScroll);
                 }
             });
-
             sendFileButton.addActionListener(e -> {
                 JFileChooser fc = new JFileChooser();
                 int res = fc.showOpenDialog(chatSessionPanel);
@@ -865,36 +984,34 @@ public class ChatClient extends JFrame {
                         if (networkClient != null) {
                             networkClient.sendMessage("", "GROUP_FILE|" + msgId + "|" + currentUser.username + "|" + groupName + "|" + file.getName() + "|" + base64Encoded);
                         }
+                        scrollToBottom(convScroll);
                     } catch (IOException ex) {
                         JOptionPane.showMessageDialog(chatSessionPanel, "Error reading file: " + ex.getMessage());
                     }
                 }
             });
-
             closeChatButton.addActionListener(e -> {
                 chatSessionPanel.removeAll();
                 chatSessionPanel.revalidate();
                 chatSessionPanel.repaint();
                 currentChatContact = null;
             });
-
             inputPanel.add(inputField);
             inputPanel.add(sendMsgButton);
             inputPanel.add(sendFileButton);
             inputPanel.add(closeChatButton);
-
             chatSessionPanel.add(convScroll, BorderLayout.CENTER);
             chatSessionPanel.add(inputPanel, BorderLayout.SOUTH);
             chatSessionPanel.revalidate();
             chatSessionPanel.repaint();
         }
 
+        // openCreateGroupDialog inside ChatMainPanel
         private void openCreateGroupDialog() {
             JDialog groupDialog = new JDialog(ChatClient.this, "Create Group", true);
             groupDialog.setSize(400, 400);
             groupDialog.setLocationRelativeTo(ChatClient.this);
             groupDialog.setLayout(new BorderLayout());
-
             JPanel selectionPanel = new JPanel();
             selectionPanel.setLayout(new BoxLayout(selectionPanel, BoxLayout.Y_AXIS));
             Map<String, JCheckBox> checkBoxes = new HashMap<>();
@@ -910,18 +1027,16 @@ public class ChatClient extends JFrame {
             JScrollPane scrollPane = new JScrollPane(selectionPanel);
             scrollPane.setBorder(BorderFactory.createTitledBorder("Select Contacts"));
             scrollPane.getViewport().setBackground(DARK_BG);
-
             JPanel groupNamePanel = new JPanel(new FlowLayout());
             groupNamePanel.setBackground(DARK_BG);
             JLabel nameLabel = new JLabel("Group Name:");
             nameLabel.setForeground(LIGHT_TEXT);
             JTextField groupNameField = new JTextField(20);
-            styleTextField(groupNameField);
+            ChatClient.this.styleTextField(groupNameField);
             groupNamePanel.add(nameLabel);
             groupNamePanel.add(groupNameField);
-
             JButton createBtn = new JButton("Create");
-            styleButton(createBtn);
+            ChatClient.this.styleButton(createBtn);
             createBtn.addActionListener(e -> {
                 String groupName = groupNameField.getText().trim();
                 if (groupName.isEmpty()) {
@@ -940,19 +1055,16 @@ public class ChatClient extends JFrame {
                 }
                 selected.add(currentUser.username);
                 String membersStr = String.join(",", selected);
-                if(networkClient != null) {
+                if (networkClient != null) {
                     networkClient.sendMessage("", "CREATE_GROUP|" + groupName + "|" + currentUser.username + "|" + membersStr);
                 }
                 groups.put(groupName, new HashSet<>(selected));
-                // You may also want to persist the group here if the server supports that.
-                chatMainPanel.refreshContacts();
+                refreshContacts();
                 groupDialog.dispose();
             });
-
             JPanel bottomPanel = new JPanel(new FlowLayout());
             bottomPanel.setBackground(DARK_BG);
             bottomPanel.add(createBtn);
-
             groupDialog.add(scrollPane, BorderLayout.CENTER);
             groupDialog.add(groupNamePanel, BorderLayout.NORTH);
             groupDialog.add(bottomPanel, BorderLayout.SOUTH);
@@ -960,50 +1072,43 @@ public class ChatClient extends JFrame {
         }
 
         private JPanel createMessagePanel(Message m) {
+            boolean isSelf = m.getSender().equals(currentUser.username);
+            Color bubbleColor = isSelf ? new Color(100, 200, 255) : new Color(200, 200, 200);
+            ChatBubble bubble = new ChatBubble(
+                    isSelf ? "You: " + m.getContent() : m.getSender() + ": " + m.getContent(),
+                    m.getTimestamp(), bubbleColor, isSelf
+            );
+            bubble.setFont(new Font("SansSerif", Font.PLAIN, 14));
+            bubble.setForeground(Color.BLACK);
             JPanel panel = new JPanel(new BorderLayout());
-            panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-            panel.setBackground(DARKER_BG);
-            String displayName = m.getSender().equals(currentUser.username) ? "You" : m.getSender();
-            JLabel msgLabel;
-            if (m.getType().equals("MSG") || m.getType().equals("GROUP_MSG") || m.getType().equals("GROUP_FILE")) {
-                msgLabel = new JLabel(displayName + ": " + m.getContent());
-            } else if (m.getType().equals("FILE")) {
-                msgLabel = new JLabel(displayName + " sent a file: " + m.getContent());
-            } else {
-                msgLabel = new JLabel(displayName + ": " + m.getContent());
-            }
-            msgLabel.setForeground(LIGHT_TEXT);
-            panel.add(msgLabel, BorderLayout.CENTER);
-
-            JLabel statusLabel = new JLabel();
-            statusLabel.setForeground(new Color(0, 255, 0));
-            if (m.getSender().equals(currentUser.username)) {
-                switch (m.getStatus()) {
-                    case "DELIVERED": statusLabel.setText(" ✔"); break;
-                    case "READ":      statusLabel.setText(" ✔✔"); break;
-                    default:          statusLabel.setText(" …"); break;
-                }
-            }
-            panel.add(statusLabel, BorderLayout.EAST);
-
-            // Add a download button for file messages
+            panel.setOpaque(false);
+            panel.setBorder(new EmptyBorder(5, 5, 5, 5));
+            panel.add(bubble, BorderLayout.CENTER);
+            Timeline fadeTimeline = new Timeline(bubble);
+            fadeTimeline.addPropertyToInterpolate("alpha", 0f, 1f);
+            fadeTimeline.setDuration(500);
+            fadeTimeline.play();
+            Timeline slideTimeline = new Timeline(bubble);
+            slideTimeline.addPropertyToInterpolate("offset", bubble.offset, 0);
+            slideTimeline.setDuration(500);
+            slideTimeline.play();
             if (m.getType().equals("FILE") || m.getType().equals("GROUP_FILE")) {
                 JButton downloadBtn = new JButton("Download");
-                styleButton(downloadBtn);
-                downloadBtn.setFont(new Font("SansSerif", Font.PLAIN, 14));
+                ChatClient.this.styleButton(downloadBtn);
+                downloadBtn.setFont(new Font("SansSerif", Font.PLAIN, 12));
                 downloadBtn.addActionListener(e -> {
                     JFileChooser chooser = new JFileChooser();
                     chooser.setSelectedFile(new File(m.getContent()));
-                    int res = chooser.showSaveDialog(chatSessionPanel);
+                    int res = chooser.showSaveDialog(panel);
                     if (res == JFileChooser.APPROVE_OPTION) {
                         File outFile = chooser.getSelectedFile();
                         try {
                             byte[] data = Base64.getDecoder().decode(m.getFileData());
                             Files.write(outFile.toPath(), data);
-                            JOptionPane.showMessageDialog(chatSessionPanel, "File downloaded to " + outFile.getAbsolutePath());
+                            JOptionPane.showMessageDialog(panel, "File downloaded to " + outFile.getAbsolutePath());
                             downloadBtn.setEnabled(false);
                         } catch (IOException ex) {
-                            JOptionPane.showMessageDialog(chatSessionPanel, "Error saving file: " + ex.getMessage());
+                            JOptionPane.showMessageDialog(panel, "Error saving file: " + ex.getMessage());
                         }
                     }
                 });
@@ -1017,7 +1122,8 @@ public class ChatClient extends JFrame {
             if (currentChatContact == null || !currentChatContact.equals(contact)) {
                 int cnt = currentUser.unreadCounts.getOrDefault(contact, 0) + 1;
                 currentUser.unreadCounts.put(contact, cnt);
-                String snippet = (m.getType().equals("FILE") || m.getType().equals("GROUP_FILE")) ? "[File: " + m.getContent() + "]" : m.getContent();
+                String snippet = (m.getType().equals("FILE") || m.getType().equals("GROUP_FILE"))
+                        ? "[File: " + m.getContent() + "]" : m.getContent();
                 if (snippet.length() > 20) {
                     snippet = snippet.substring(0, 20) + "...";
                 }
@@ -1032,7 +1138,7 @@ public class ChatClient extends JFrame {
                 label.setForeground(LIGHT_TEXT);
                 JPanel p = new JPanel(new BorderLayout());
                 p.setBackground(DARK_BG);
-                p.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+                p.setBorder(new EmptyBorder(5, 5, 5, 5));
                 p.add(label, BorderLayout.CENTER);
                 conversationPanel.add(p);
                 conversationPanel.revalidate();
@@ -1041,13 +1147,12 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- NETWORK CLIENT -------------
+    // ------------- NetworkClient -------------
     private class NetworkClient implements Runnable {
         private Socket socket;
         private PrintWriter out;
         private BufferedReader in;
         private String username;
-
         public NetworkClient(String username) {
             this.username = username;
             try {
@@ -1059,13 +1164,11 @@ public class ChatClient extends JFrame {
                 JOptionPane.showMessageDialog(ChatClient.this, "Unable to connect to server: " + e.getMessage());
             }
         }
-
         public void sendMessage(String recipient, String message) {
             if (out != null) {
                 out.println(message);
             }
         }
-
         public void run() {
             String line;
             try {
@@ -1237,7 +1340,6 @@ public class ChatClient extends JFrame {
                 e.printStackTrace();
             }
         }
-
         public void close() {
             try {
                 socket.close();
@@ -1245,7 +1347,7 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- SQL DATABASE HELPER -------------
+    // ------------- SQLDatabase Helper -------------
     private class SQLDatabase {
         private Connection conn;
         public SQLDatabase() {
@@ -1373,7 +1475,7 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- MAIN METHOD -------------
+    // ------------- Main Method -------------
     public static void main(String[] args) {
         try {
             UIManager.setLookAndFeel(new FlatDarkLaf());
