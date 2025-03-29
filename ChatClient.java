@@ -1,3 +1,6 @@
+import com.formdev.flatlaf.FlatDarkLaf;
+import javax.swing.*;
+import javax.swing.border.LineBorder;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
@@ -6,9 +9,8 @@ import java.nio.file.Files;
 import java.sql.*;
 import java.util.*;
 import java.util.List;
+import java.util.Base64;
 import java.util.concurrent.atomic.AtomicLong;
-import javax.swing.*;
-import javax.swing.border.LineBorder;
 
 public class ChatClient extends JFrame {
 
@@ -942,7 +944,8 @@ public class ChatClient extends JFrame {
                     networkClient.sendMessage("", "CREATE_GROUP|" + groupName + "|" + currentUser.username + "|" + membersStr);
                 }
                 groups.put(groupName, new HashSet<>(selected));
-                refreshContacts();
+                // You may also want to persist the group here if the server supports that.
+                chatMainPanel.refreshContacts();
                 groupDialog.dispose();
             });
 
@@ -1050,7 +1053,7 @@ public class ChatClient extends JFrame {
             try {
                 socket = new Socket(SERVER_ADDRESS, SERVER_PORT);
                 out = new PrintWriter(socket.getOutputStream(), true);
-                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 out.println(username);
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(ChatClient.this, "Unable to connect to server: " + e.getMessage());
@@ -1373,8 +1376,8 @@ public class ChatClient extends JFrame {
     // ------------- MAIN METHOD -------------
     public static void main(String[] args) {
         try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception e) {
+            UIManager.setLookAndFeel(new FlatDarkLaf());
+        } catch (UnsupportedLookAndFeelException e) {
             e.printStackTrace();
         }
         SwingUtilities.invokeLater(() -> {

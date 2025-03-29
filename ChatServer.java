@@ -49,7 +49,7 @@ public class ChatServer {
                     "members TEXT" +
                     ")";
             try (Connection conn = DriverManager.getConnection(DB_URL);
-                    Statement stmt = conn.createStatement()) {
+                 Statement stmt = conn.createStatement()) {
                 stmt.execute(sql);
             } catch (SQLException e) {
                 e.printStackTrace();
@@ -60,8 +60,8 @@ public class ChatServer {
             Map<String, Set<String>> groupMap = new HashMap<>();
             String sql = "SELECT * FROM groups";
             try (Connection conn = DriverManager.getConnection(DB_URL);
-                    Statement stmt = conn.createStatement();
-                    ResultSet rs = stmt.executeQuery(sql)) {
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
                 while (rs.next()) {
                     String groupName = rs.getString("group_name");
                     String membersStr = rs.getString("members");
@@ -77,7 +77,7 @@ public class ChatServer {
         public void saveGroup(String groupName, Set<String> members) {
             String sql = "INSERT OR REPLACE INTO groups(group_name, members) VALUES(?,?)";
             try (Connection conn = DriverManager.getConnection(DB_URL);
-                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, groupName);
                 pstmt.setString(2, String.join(",", members));
                 pstmt.executeUpdate();
@@ -89,7 +89,7 @@ public class ChatServer {
         public void deleteGroup(String groupName) {
             String sql = "DELETE FROM groups WHERE group_name = ?";
             try (Connection conn = DriverManager.getConnection(DB_URL);
-                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, groupName);
                 pstmt.executeUpdate();
             } catch (SQLException e) {
@@ -111,7 +111,7 @@ public class ChatServer {
         public void run() {
             try {
                 out = new PrintWriter(socket.getOutputStream(), true);
-                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 // First message is the username for identification.
                 username = in.readLine();
                 if (username == null)
@@ -119,8 +119,7 @@ public class ChatServer {
                 clients.put(username, this);
                 System.out.println(username + " connected.");
 
-                // Send groups the user belongs to so that the client can add these groups
-                // locally.
+                // Send groups the user belongs to so that the client can add these groups locally.
                 for (String groupName : groups.keySet()) {
                     Set<String> mem = groups.get(groupName);
                     if (mem.contains(username)) {
@@ -193,8 +192,7 @@ public class ChatServer {
                                 if (!member.equals(sender)) {
                                     ClientHandler memberHandler = clients.get(member);
                                     if (memberHandler != null) {
-                                        memberHandler.out.println(
-                                                "GROUP_MSG|" + msgId + "|" + sender + "|" + groupName + "|" + content);
+                                        memberHandler.out.println("GROUP_MSG|" + msgId + "|" + sender + "|" + groupName + "|" + content);
                                     }
                                 }
                             }
@@ -225,8 +223,7 @@ public class ChatServer {
                                 if (!member.equals(sender)) {
                                     ClientHandler memberHandler = clients.get(member);
                                     if (memberHandler != null) {
-                                        memberHandler.out.println("GROUP_FILE|" + msgId + "|" + sender + "|" + groupName
-                                                + "|" + filename + "|" + base64data);
+                                        memberHandler.out.println("GROUP_FILE|" + msgId + "|" + sender + "|" + groupName + "|" + filename + "|" + base64data);
                                     }
                                 }
                             }
@@ -278,13 +275,11 @@ public class ChatServer {
                         if (members != null && members.contains(user)) {
                             groups.remove(oldGroupName);
                             groups.put(newGroupName, members);
-                            System.out
-                                    .println(user + " changed group name from " + oldGroupName + " to " + newGroupName);
+                            System.out.println(user + " changed group name from " + oldGroupName + " to " + newGroupName);
                             for (String member : members) {
                                 ClientHandler memberHandler = clients.get(member);
                                 if (memberHandler != null) {
-                                    memberHandler.out
-                                            .println("GROUP_UPDATE|" + oldGroupName + "|NAME_CHANGED|" + newGroupName);
+                                    memberHandler.out.println("GROUP_UPDATE|" + oldGroupName + "|NAME_CHANGED|" + newGroupName);
                                 }
                             }
                             groupDB.deleteGroup(oldGroupName);
