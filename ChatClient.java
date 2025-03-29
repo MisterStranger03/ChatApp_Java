@@ -1,5 +1,3 @@
-import javax.swing.*;
-import javax.swing.border.LineBorder;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
@@ -8,8 +6,9 @@ import java.nio.file.Files;
 import java.sql.*;
 import java.util.*;
 import java.util.List;
-import java.util.Base64;
 import java.util.concurrent.atomic.AtomicLong;
+import javax.swing.*;
+import javax.swing.border.LineBorder;
 
 public class ChatClient extends JFrame {
 
@@ -31,13 +30,12 @@ public class ChatClient extends JFrame {
     private static final String DB_URL = "jdbc:sqlite:chatapp.db";
 
     // ------------- Data Models -------------
-    // We'll define User and Message as static nested classes.
     public static class User implements Serializable {
         private static final long serialVersionUID = 1L;
         public String name;
         public String username;
         public String password;
-        public String profilePhotoBase64; // Base64-encoded photo
+        public String profilePhotoBase64;
         public Map<String, List<Message>> chatHistory = new HashMap<>();
         public Map<String, Integer> unreadCounts = new HashMap<>();
         public Map<String, String> unreadSnippets = new HashMap<>();
@@ -56,9 +54,9 @@ public class ChatClient extends JFrame {
         private String sender;
         private String recipient;
         private String content;
-        private String type;      // "MSG" or "FILE"
-        private String fileData;  // Base64 encoded file data (if FILE)
-        private String status;    // "PENDING", "DELIVERED", "READ"
+        private String type;      // "MSG", "FILE", "GROUP_MSG", or "GROUP_FILE"
+        private String fileData;
+        private String status;
         private long timestamp;
 
         public Message(String messageId, String sender, String recipient, String content, String type, String fileData) {
@@ -72,17 +70,11 @@ public class ChatClient extends JFrame {
             this.timestamp = System.currentTimeMillis();
         }
         public String getMessageId() { return messageId; }
-        public void setMessageId(String messageId) { this.messageId = messageId; }
         public String getSender() { return sender; }
-        public void setSender(String sender) { this.sender = sender; }
         public String getRecipient() { return recipient; }
-        public void setRecipient(String recipient) { this.recipient = recipient; }
         public String getContent() { return content; }
-        public void setContent(String content) { this.content = content; }
         public String getType() { return type; }
-        public void setType(String type) { this.type = type; }
         public String getFileData() { return fileData; }
-        public void setFileData(String fileData) { this.fileData = fileData; }
         public String getStatus() { return status; }
         public void setStatus(String status) { this.status = status; }
         public long getTimestamp() { return timestamp; }
@@ -103,8 +95,10 @@ public class ChatClient extends JFrame {
     // ------------- Others -------------
     private AtomicLong messageIdGenerator = new AtomicLong(System.currentTimeMillis());
     private SQLDatabase db;
-    private Map<String, User> users; // All users loaded from DB.
-    private User currentUser;        // The logged-in user.
+    private Map<String, User> users;
+    private User currentUser;
+    // Local mapping for groups: groupName -> Set of members
+    private Map<String, Set<String>> groups = new HashMap<>();
 
     // ------------- Constructor -------------
     public ChatClient() {
@@ -113,7 +107,6 @@ public class ChatClient extends JFrame {
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
-        // Initialize database and load users
         db = new SQLDatabase();
         db.initialize();
         users = db.loadUsers();
@@ -135,6 +128,7 @@ public class ChatClient extends JFrame {
 
     // ------------- Utility Methods -------------
     private void showLoader(String message) {
+        // Retained for profile updates and registration; auto-refresh does not show loader.
         JDialog loader = new JDialog(this, "Loading", true);
         loader.setSize(300, 100);
         loader.setLocationRelativeTo(this);
@@ -144,7 +138,6 @@ public class ChatClient extends JFrame {
         label.setFont(LABEL_FONT);
         loader.getContentPane().setBackground(DARK_BG);
         loader.add(label, BorderLayout.CENTER);
-        // Use javax.swing.Timer to avoid ambiguity
         javax.swing.Timer t = new javax.swing.Timer(2000, e -> loader.dispose());
         t.setRepeats(false);
         t.start();
@@ -470,6 +463,7 @@ public class ChatClient extends JFrame {
         private JList<String> contactsList;
         private JPanel chatSessionPanel;
         private JLabel headerLabel;
+        // currentChatContact stores either an individual username or "Group: groupName"
         private String currentChatContact = null;
         private JPanel conversationPanel;
 
@@ -528,6 +522,14 @@ public class ChatClient extends JFrame {
             contactsScroll.setBorder(BorderFactory.createTitledBorder(new LineBorder(ACCENT_COLOR), "Contacts"));
             contactsScroll.getViewport().setBackground(DARKER_BG);
 
+            JButton createGroupButton = new JButton("Create Group");
+            styleButton(createGroupButton);
+            createGroupButton.addActionListener(e -> openCreateGroupDialog());
+
+            JPanel leftPanel = new JPanel(new BorderLayout());
+            leftPanel.add(createGroupButton, BorderLayout.NORTH);
+            leftPanel.add(contactsScroll, BorderLayout.CENTER);
+
             chatSessionPanel = new JPanel(new BorderLayout());
             chatSessionPanel.setBackground(DARKER_BG);
             chatSessionPanel.setBorder(BorderFactory.createTitledBorder(new LineBorder(ACCENT_COLOR), "Conversation"));
@@ -538,16 +540,28 @@ public class ChatClient extends JFrame {
                     if (e.getClickCount() == 2) {
                         String display = contactsList.getSelectedValue();
                         if (display != null) {
-                            String contact = display.split(" ")[0];
-                            openChatSession(contact);
+                            if (display.startsWith("Group:")) {
+                                String groupName = display.substring(6).trim();
+                                openGroupChatSession(groupName);
+                            } else {
+                                String contact = display.split(" ")[0];
+                                openIndividualChatSession(contact);
+                            }
                         }
                     }
                 }
             });
 
-            JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, contactsScroll, chatSessionPanel);
+            JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPanel, chatSessionPanel);
             splitPane.setDividerLocation(250);
             add(splitPane, BorderLayout.CENTER);
+
+            // Auto-refresh chats every 5 seconds without loading screens
+            new javax.swing.Timer(5000, e -> {
+                users = db.loadUsers();
+                refreshContacts();
+                refreshChatHistory();
+            }).start();
         }
 
         public void refreshContacts() {
@@ -555,6 +569,7 @@ public class ChatClient extends JFrame {
                 return;
             headerLabel.setText("Welcome, " + currentUser.name);
             contactsModel.clear();
+            // Add individual contacts
             for (String uname : users.keySet()) {
                 if (!uname.equals(currentUser.username)) {
                     int unread = currentUser.unreadCounts.getOrDefault(uname, 0);
@@ -569,13 +584,17 @@ public class ChatClient extends JFrame {
                     contactsModel.addElement(display);
                 }
             }
+            // Add groups from local mapping
+            for (String groupName : groups.keySet()) {
+                contactsModel.addElement("Group: " + groupName);
+            }
         }
 
         public void refreshChatHistory() {
-            // Chat history is loaded from currentUser.
+            // Optionally, update conversation panels if needed.
         }
 
-        public void openChatSession(String contact) {
+        public void openIndividualChatSession(String contact) {
             currentChatContact = contact;
             currentUser.unreadCounts.put(contact, 0);
             currentUser.unreadSnippets.remove(contact);
@@ -680,13 +699,270 @@ public class ChatClient extends JFrame {
             }
         }
 
+        public void openGroupChatSession(String groupName) {
+            currentChatContact = "Group: " + groupName;
+            chatSessionPanel.removeAll();
+            chatSessionPanel.setLayout(new BorderLayout());
+
+            // Group header with popup menu for options
+            JPanel groupHeader = new JPanel(new BorderLayout());
+            groupHeader.setBackground(DARKER_BG);
+            JLabel groupLabel = new JLabel("Group: " + groupName);
+            groupLabel.setFont(TITLE_FONT);
+            groupLabel.setForeground(ACCENT_COLOR);
+            groupHeader.add(groupLabel, BorderLayout.WEST);
+
+            groupLabel.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    JPopupMenu menu = new JPopupMenu();
+                    JMenuItem leaveItem = new JMenuItem("Leave Group");
+                    JMenuItem changeNameItem = new JMenuItem("Change Group Name");
+                    JMenuItem showMembersItem = new JMenuItem("Show Members");
+                    JMenuItem addUserItem = new JMenuItem("Add User");
+
+                    leaveItem.addActionListener(ae -> {
+                        if (networkClient != null) {
+                            networkClient.sendMessage("", "LEAVE_GROUP|" + groupName + "|" + currentUser.username);
+                            groups.remove(groupName);
+                            JOptionPane.showMessageDialog(ChatMainPanel.this, "You have left the group.");
+                            chatSessionPanel.removeAll();
+                            chatSessionPanel.revalidate();
+                            chatSessionPanel.repaint();
+                            currentChatContact = null;
+                            refreshContacts();
+                        }
+                    });
+
+                    changeNameItem.addActionListener(ae -> {
+                        String newName = JOptionPane.showInputDialog(ChatMainPanel.this, "Enter new group name:");
+                        if (newName != null && !newName.trim().isEmpty() && networkClient != null) {
+                            networkClient.sendMessage("", "UPDATE_GROUP|" + groupName + "|" + newName + "|" + currentUser.username);
+                            Set<String> members = groups.get(groupName);
+                            groups.remove(groupName);
+                            groups.put(newName, members);
+                            groupLabel.setText("Group: " + newName);
+                            refreshContacts();
+                        }
+                    });
+
+                    showMembersItem.addActionListener(ae -> {
+                        if (networkClient != null) {
+                            networkClient.sendMessage("", "GROUP_INFO|" + groupName);
+                        }
+                        SwingUtilities.invokeLater(() -> {
+                            Set<String> mem = groups.get(groupName);
+                            if (mem != null) {
+                                JOptionPane.showMessageDialog(ChatMainPanel.this, "Members: " + String.join(", ", mem));
+                            } else {
+                                JOptionPane.showMessageDialog(ChatMainPanel.this, "No member info available.");
+                            }
+                        });
+                    });
+
+                    // "Add User" now shows checkboxes for remaining available users
+                    addUserItem.addActionListener(ae -> {
+                        Set<String> currentMembers = groups.get(groupName);
+                        List<String> availableUsers = new ArrayList<>();
+                        for(String uname : users.keySet()){
+                            if(!uname.equals(currentUser.username) && (currentMembers == null || !currentMembers.contains(uname))){
+                                availableUsers.add(uname);
+                            }
+                        }
+                        if(availableUsers.isEmpty()){
+                            JOptionPane.showMessageDialog(ChatMainPanel.this, "No users available to add.");
+                            return;
+                        }
+                        JPanel panel = new JPanel();
+                        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+                        Map<String, JCheckBox> checkboxMap = new HashMap<>();
+                        for(String user: availableUsers){
+                            JCheckBox cb = new JCheckBox(user);
+                            cb.setForeground(LIGHT_TEXT);
+                            cb.setBackground(DARK_BG);
+                            panel.add(cb);
+                            checkboxMap.put(user, cb);
+                        }
+                        int result = JOptionPane.showConfirmDialog(ChatMainPanel.this, panel, "Select users to add", JOptionPane.OK_CANCEL_OPTION);
+                        if(result == JOptionPane.OK_OPTION){
+                            for(Map.Entry<String, JCheckBox> entry: checkboxMap.entrySet()){
+                                if(entry.getValue().isSelected()){
+                                    networkClient.sendMessage("", "ADD_TO_GROUP|" + groupName + "|" + currentUser.username + "|" + entry.getKey());
+                                }
+                            }
+                        }
+                    });
+
+                    menu.add(leaveItem);
+                    menu.add(changeNameItem);
+                    menu.add(showMembersItem);
+                    menu.add(addUserItem);
+                    menu.show(groupLabel, e.getX(), e.getY());
+                }
+            });
+
+            chatSessionPanel.add(groupHeader, BorderLayout.NORTH);
+
+            conversationPanel = new JPanel();
+            conversationPanel.setLayout(new BoxLayout(conversationPanel, BoxLayout.Y_AXIS));
+            conversationPanel.setBackground(DARK_BG);
+            JScrollPane convScroll = new JScrollPane(conversationPanel);
+            convScroll.setBorder(null);
+            convScroll.getViewport().setBackground(DARK_BG);
+
+            List<Message> history = currentUser.chatHistory.get("Group:" + groupName);
+            if (history != null) {
+                for (Message m : history) {
+                    conversationPanel.add(createMessagePanel(m));
+                }
+            }
+
+            JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
+            inputPanel.setBackground(DARKER_BG);
+            JTextField inputField = new JTextField(30);
+            styleTextField(inputField);
+            JButton sendMsgButton = new JButton("Send");
+            styleButton(sendMsgButton);
+            JButton sendFileButton = new JButton("Send File");
+            styleButton(sendFileButton);
+            JButton closeChatButton = new JButton("Close Chat");
+            styleButton(closeChatButton);
+
+            sendMsgButton.addActionListener(e -> {
+                String msgText = inputField.getText().trim();
+                if (!msgText.isEmpty()) {
+                    String msgId = currentUser.username + "-" + messageIdGenerator.getAndIncrement();
+                    Message msg = new Message(msgId, currentUser.username, groupName, msgText, "GROUP_MSG", null);
+                    msg.setStatus("PENDING");
+                    addMessageToHistory("Group:" + groupName, msg);
+                    conversationPanel.add(createMessagePanel(msg));
+                    conversationPanel.revalidate();
+                    conversationPanel.repaint();
+                    inputField.setText("");
+                    if (networkClient != null) {
+                        networkClient.sendMessage("", "GROUP_MSG|" + msgId + "|" + currentUser.username + "|" + groupName + "|" + msgText);
+                    }
+                }
+            });
+
+            sendFileButton.addActionListener(e -> {
+                JFileChooser fc = new JFileChooser();
+                int res = fc.showOpenDialog(chatSessionPanel);
+                if (res == JFileChooser.APPROVE_OPTION) {
+                    File file = fc.getSelectedFile();
+                    try {
+                        byte[] data = Files.readAllBytes(file.toPath());
+                        String base64Encoded = Base64.getEncoder().encodeToString(data);
+                        String msgId = currentUser.username + "-" + messageIdGenerator.getAndIncrement();
+                        Message fileMsg = new Message(msgId, currentUser.username, groupName, file.getName(), "GROUP_FILE", base64Encoded);
+                        fileMsg.setStatus("PENDING");
+                        addMessageToHistory("Group:" + groupName, fileMsg);
+                        conversationPanel.add(createMessagePanel(fileMsg));
+                        conversationPanel.revalidate();
+                        conversationPanel.repaint();
+                        if (networkClient != null) {
+                            networkClient.sendMessage("", "GROUP_FILE|" + msgId + "|" + currentUser.username + "|" + groupName + "|" + file.getName() + "|" + base64Encoded);
+                        }
+                    } catch (IOException ex) {
+                        JOptionPane.showMessageDialog(chatSessionPanel, "Error reading file: " + ex.getMessage());
+                    }
+                }
+            });
+
+            closeChatButton.addActionListener(e -> {
+                chatSessionPanel.removeAll();
+                chatSessionPanel.revalidate();
+                chatSessionPanel.repaint();
+                currentChatContact = null;
+            });
+
+            inputPanel.add(inputField);
+            inputPanel.add(sendMsgButton);
+            inputPanel.add(sendFileButton);
+            inputPanel.add(closeChatButton);
+
+            chatSessionPanel.add(convScroll, BorderLayout.CENTER);
+            chatSessionPanel.add(inputPanel, BorderLayout.SOUTH);
+            chatSessionPanel.revalidate();
+            chatSessionPanel.repaint();
+        }
+
+        private void openCreateGroupDialog() {
+            JDialog groupDialog = new JDialog(ChatClient.this, "Create Group", true);
+            groupDialog.setSize(400, 400);
+            groupDialog.setLocationRelativeTo(ChatClient.this);
+            groupDialog.setLayout(new BorderLayout());
+
+            JPanel selectionPanel = new JPanel();
+            selectionPanel.setLayout(new BoxLayout(selectionPanel, BoxLayout.Y_AXIS));
+            Map<String, JCheckBox> checkBoxes = new HashMap<>();
+            for (String uname : users.keySet()) {
+                if (!uname.equals(currentUser.username)) {
+                    JCheckBox cb = new JCheckBox(uname);
+                    cb.setForeground(LIGHT_TEXT);
+                    cb.setBackground(DARK_BG);
+                    checkBoxes.put(uname, cb);
+                    selectionPanel.add(cb);
+                }
+            }
+            JScrollPane scrollPane = new JScrollPane(selectionPanel);
+            scrollPane.setBorder(BorderFactory.createTitledBorder("Select Contacts"));
+            scrollPane.getViewport().setBackground(DARK_BG);
+
+            JPanel groupNamePanel = new JPanel(new FlowLayout());
+            groupNamePanel.setBackground(DARK_BG);
+            JLabel nameLabel = new JLabel("Group Name:");
+            nameLabel.setForeground(LIGHT_TEXT);
+            JTextField groupNameField = new JTextField(20);
+            styleTextField(groupNameField);
+            groupNamePanel.add(nameLabel);
+            groupNamePanel.add(groupNameField);
+
+            JButton createBtn = new JButton("Create");
+            styleButton(createBtn);
+            createBtn.addActionListener(e -> {
+                String groupName = groupNameField.getText().trim();
+                if (groupName.isEmpty()) {
+                    JOptionPane.showMessageDialog(groupDialog, "Please enter a group name.");
+                    return;
+                }
+                List<String> selected = new ArrayList<>();
+                for (Map.Entry<String, JCheckBox> entry : checkBoxes.entrySet()) {
+                    if (entry.getValue().isSelected()) {
+                        selected.add(entry.getKey());
+                    }
+                }
+                if (selected.isEmpty()) {
+                    JOptionPane.showMessageDialog(groupDialog, "Select at least one contact.");
+                    return;
+                }
+                selected.add(currentUser.username);
+                String membersStr = String.join(",", selected);
+                if(networkClient != null) {
+                    networkClient.sendMessage("", "CREATE_GROUP|" + groupName + "|" + currentUser.username + "|" + membersStr);
+                }
+                groups.put(groupName, new HashSet<>(selected));
+                refreshContacts();
+                groupDialog.dispose();
+            });
+
+            JPanel bottomPanel = new JPanel(new FlowLayout());
+            bottomPanel.setBackground(DARK_BG);
+            bottomPanel.add(createBtn);
+
+            groupDialog.add(scrollPane, BorderLayout.CENTER);
+            groupDialog.add(groupNamePanel, BorderLayout.NORTH);
+            groupDialog.add(bottomPanel, BorderLayout.SOUTH);
+            groupDialog.setVisible(true);
+        }
+
         private JPanel createMessagePanel(Message m) {
             JPanel panel = new JPanel(new BorderLayout());
             panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
             panel.setBackground(DARKER_BG);
             String displayName = m.getSender().equals(currentUser.username) ? "You" : m.getSender();
             JLabel msgLabel;
-            if (m.getType().equals("MSG")) {
+            if (m.getType().equals("MSG") || m.getType().equals("GROUP_MSG") || m.getType().equals("GROUP_FILE")) {
                 msgLabel = new JLabel(displayName + ": " + m.getContent());
             } else if (m.getType().equals("FILE")) {
                 msgLabel = new JLabel(displayName + " sent a file: " + m.getContent());
@@ -707,7 +983,8 @@ public class ChatClient extends JFrame {
             }
             panel.add(statusLabel, BorderLayout.EAST);
 
-            if (m.getType().equals("FILE")) {
+            // Add a download button for file messages
+            if (m.getType().equals("FILE") || m.getType().equals("GROUP_FILE")) {
                 JButton downloadBtn = new JButton("Download");
                 styleButton(downloadBtn);
                 downloadBtn.setFont(new Font("SansSerif", Font.PLAIN, 14));
@@ -737,7 +1014,7 @@ public class ChatClient extends JFrame {
             if (currentChatContact == null || !currentChatContact.equals(contact)) {
                 int cnt = currentUser.unreadCounts.getOrDefault(contact, 0) + 1;
                 currentUser.unreadCounts.put(contact, cnt);
-                String snippet = m.getType().equals("FILE") ? "[File: " + m.getContent() + "]" : m.getContent();
+                String snippet = (m.getType().equals("FILE") || m.getType().equals("GROUP_FILE")) ? "[File: " + m.getContent() + "]" : m.getContent();
                 if (snippet.length() > 20) {
                     snippet = snippet.substring(0, 20) + "...";
                 }
@@ -751,7 +1028,7 @@ public class ChatClient extends JFrame {
                 JLabel label = new JLabel(displayText);
                 label.setForeground(LIGHT_TEXT);
                 JPanel p = new JPanel(new BorderLayout());
-                p.setBackground(DARKER_BG);
+                p.setBackground(DARK_BG);
                 p.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
                 p.add(label, BorderLayout.CENTER);
                 conversationPanel.add(p);
@@ -790,7 +1067,7 @@ public class ChatClient extends JFrame {
             String line;
             try {
                 while ((line = in.readLine()) != null) {
-                    String[] parts = line.split("\\|", 6);
+                    String[] parts = line.split("\\|", 7);
                     if (parts.length < 1)
                         continue;
                     String type = parts[0];
@@ -846,6 +1123,96 @@ public class ChatClient extends JFrame {
                             sendMessage(sender, "ACK|" + msgId + "|READ");
                             m.setStatus("READ");
                         }
+                    } else if (type.equals("GROUP_MSG")) {
+                        if (parts.length < 5)
+                            continue;
+                        String msgId = parts[1];
+                        String sender = parts[2];
+                        String groupName = parts[3];
+                        String content = parts[4];
+                        Message m = new Message(msgId, sender, groupName, content, "GROUP_MSG", null);
+                        m.setStatus("DELIVERED");
+                        String localGroupKey = "Group:" + groupName;
+                        if (currentUser != null && (chatMainPanel.currentChatContact == null || !chatMainPanel.currentChatContact.equals(localGroupKey))) {
+                            int cnt = currentUser.unreadCounts.getOrDefault(localGroupKey, 0) + 1;
+                            currentUser.unreadCounts.put(localGroupKey, cnt);
+                            currentUser.unreadSnippets.put(localGroupKey, content.length() > 20 ? content.substring(0,20) + "..." : content);
+                            chatMainPanel.refreshContacts();
+                        }
+                        currentUser.chatHistory.computeIfAbsent(localGroupKey, k -> new ArrayList<>()).add(m);
+                        SwingUtilities.invokeLater(() -> {
+                            chatMainPanel.updateConversation(localGroupKey, sender + " (in " + groupName + "): " + content + " ✔");
+                        });
+                        if (chatMainPanel.currentChatContact != null && chatMainPanel.currentChatContact.equals(localGroupKey)) {
+                            sendMessage("", "ACK|" + msgId + "|READ");
+                            m.setStatus("READ");
+                        }
+                    } else if (type.equals("GROUP_FILE")) {
+                        if (parts.length < 6)
+                            continue;
+                        String msgId = parts[1];
+                        String sender = parts[2];
+                        String groupName = parts[3];
+                        String filename = parts[4];
+                        String base64data = parts[5];
+                        Message m = new Message(msgId, sender, groupName, filename, "GROUP_FILE", base64data);
+                        m.setStatus("DELIVERED");
+                        String localGroupKey = "Group:" + groupName;
+                        if (currentUser != null && (chatMainPanel.currentChatContact == null || !chatMainPanel.currentChatContact.equals(localGroupKey))) {
+                            int cnt = currentUser.unreadCounts.getOrDefault(localGroupKey, 0) + 1;
+                            currentUser.unreadCounts.put(localGroupKey, cnt);
+                            currentUser.unreadSnippets.put(localGroupKey, filename);
+                            chatMainPanel.refreshContacts();
+                        }
+                        currentUser.chatHistory.computeIfAbsent(localGroupKey, k -> new ArrayList<>()).add(m);
+                        SwingUtilities.invokeLater(() -> {
+                            chatMainPanel.updateConversation(localGroupKey, sender + " (in " + groupName + ") sent a file: " + filename + " ✔");
+                        });
+                        if (chatMainPanel.currentChatContact != null && chatMainPanel.currentChatContact.equals(localGroupKey)) {
+                            sendMessage("", "ACK|" + msgId + "|READ");
+                            m.setStatus("READ");
+                        }
+                    } else if (type.equals("GROUP_CREATED")) {
+                        if (parts.length >= 3) {
+                            String groupName = parts[1];
+                            String membersStr = parts[2];
+                            Set<String> memSet = new HashSet<>(Arrays.asList(membersStr.split(",")));
+                            groups.put(groupName, memSet);
+                            SwingUtilities.invokeLater(() -> {
+                                chatMainPanel.refreshContacts();
+                            });
+                        }
+                    } else if (type.equals("GROUP_UPDATE")) {
+                        if (parts.length >= 4) {
+                            String groupName = parts[1];
+                            String updateType = parts[2];
+                            String data = parts[3];
+                            if (updateType.equals("NAME_CHANGED")) {
+                                Set<String> mem = groups.get(groupName);
+                                groups.remove(groupName);
+                                groups.put(data, mem);
+                                SwingUtilities.invokeLater(() -> {
+                                    JOptionPane.showMessageDialog(ChatClient.this, "Group " + groupName + " renamed to " + data);
+                                    chatMainPanel.refreshContacts();
+                                });
+                            } else if (updateType.equals("MEMBER_LEFT")) {
+                                Set<String> mem = groups.get(groupName);
+                                if (mem != null) {
+                                    mem.remove(data);
+                                }
+                                SwingUtilities.invokeLater(() -> {
+                                    chatMainPanel.refreshContacts();
+                                });
+                            } else if (updateType.equals("USER_ADDED")) {
+                                Set<String> mem = groups.get(groupName);
+                                if (mem != null) {
+                                    mem.add(data);
+                                }
+                                SwingUtilities.invokeLater(() -> {
+                                    chatMainPanel.refreshContacts();
+                                });
+                            }
+                        }
                     } else if (type.equals("ACK")) {
                         if (parts.length < 3)
                             continue;
@@ -854,6 +1221,13 @@ public class ChatClient extends JFrame {
                         SwingUtilities.invokeLater(() -> {
                             System.out.println("Message " + msgId + " status updated: " + status);
                         });
+                    } else if (type.equals("GROUP_INFO")) {
+                        if (parts.length >= 3) {
+                            String groupName = parts[1];
+                            String memStr = parts[2];
+                            Set<String> memSet = new HashSet<>(Arrays.asList(memStr.split(",")));
+                            groups.put(groupName, memSet);
+                        }
                     }
                 }
             } catch (IOException e) {
