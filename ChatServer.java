@@ -11,6 +11,9 @@ public class ChatServer {
     // In-memory groups map, loaded from DB and updated as needed
     private Map<String, Set<String>> groups = new ConcurrentHashMap<>();
     private GroupDatabase groupDB = new GroupDatabase();
+    // Offline group messages: for any member not connected, store messages per
+    // group.
+    private Map<String, Map<String, List<String>>> offlineGroupMessages = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         new ChatServer().startServer();
@@ -49,7 +52,7 @@ public class ChatServer {
                     "members TEXT" +
                     ")";
             try (Connection conn = DriverManager.getConnection(DB_URL);
-                 Statement stmt = conn.createStatement()) {
+                    Statement stmt = conn.createStatement()) {
                 stmt.execute(sql);
             } catch (SQLException e) {
                 e.printStackTrace();
@@ -60,8 +63,8 @@ public class ChatServer {
             Map<String, Set<String>> groupMap = new HashMap<>();
             String sql = "SELECT * FROM groups";
             try (Connection conn = DriverManager.getConnection(DB_URL);
-                 Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(sql)) {
+                    Statement stmt = conn.createStatement();
+                    ResultSet rs = stmt.executeQuery(sql)) {
                 while (rs.next()) {
                     String groupName = rs.getString("group_name");
                     String membersStr = rs.getString("members");
@@ -77,7 +80,7 @@ public class ChatServer {
         public void saveGroup(String groupName, Set<String> members) {
             String sql = "INSERT OR REPLACE INTO groups(group_name, members) VALUES(?,?)";
             try (Connection conn = DriverManager.getConnection(DB_URL);
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, groupName);
                 pstmt.setString(2, String.join(",", members));
                 pstmt.executeUpdate();
@@ -89,7 +92,7 @@ public class ChatServer {
         public void deleteGroup(String groupName) {
             String sql = "DELETE FROM groups WHERE group_name = ?";
             try (Connection conn = DriverManager.getConnection(DB_URL);
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, groupName);
                 pstmt.executeUpdate();
             } catch (SQLException e) {
@@ -111,7 +114,7 @@ public class ChatServer {
         public void run() {
             try {
                 out = new PrintWriter(socket.getOutputStream(), true);
-                in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 // First message is the username for identification.
                 username = in.readLine();
                 if (username == null)
@@ -119,10 +122,22 @@ public class ChatServer {
                 clients.put(username, this);
                 System.out.println(username + " connected.");
 
-                // Send groups the user belongs to so that the client can add these groups locally.
+                // When a user connects, send them any offline group messages for groups they
+                // belong to.
                 for (String groupName : groups.keySet()) {
                     Set<String> mem = groups.get(groupName);
                     if (mem.contains(username)) {
+                        Map<String, List<String>> userMap = offlineGroupMessages.get(groupName);
+                        if (userMap != null) {
+                            List<String> offlineMsgs = userMap.get(username);
+                            if (offlineMsgs != null) {
+                                for (String msg : offlineMsgs) {
+                                    out.println(msg);
+                                }
+                                offlineMsgs.clear();
+                            }
+                        }
+                        // Notify client of group membership.
                         out.println("GROUP_CREATED|" + groupName + "|" + String.join(",", mem));
                     }
                 }
@@ -188,11 +203,18 @@ public class ChatServer {
                         String content = parts[4];
                         Set<String> members = groups.get(groupName);
                         if (members != null) {
+                            String groupMsg = "GROUP_MSG|" + msgId + "|" + sender + "|" + groupName + "|" + content;
                             for (String member : members) {
                                 if (!member.equals(sender)) {
                                     ClientHandler memberHandler = clients.get(member);
                                     if (memberHandler != null) {
-                                        memberHandler.out.println("GROUP_MSG|" + msgId + "|" + sender + "|" + groupName + "|" + content);
+                                        memberHandler.out.println(groupMsg);
+                                    } else {
+                                        // Store offline message for that member.
+                                        offlineGroupMessages
+                                                .computeIfAbsent(groupName, k -> new ConcurrentHashMap<>())
+                                                .computeIfAbsent(member, k -> new ArrayList<>())
+                                                .add(groupMsg);
                                     }
                                 }
                             }
@@ -219,11 +241,18 @@ public class ChatServer {
                         String base64data = parts[5];
                         Set<String> members = groups.get(groupName);
                         if (members != null) {
+                            String groupFileMsg = "GROUP_FILE|" + msgId + "|" + sender + "|" + groupName + "|"
+                                    + filename + "|" + base64data;
                             for (String member : members) {
                                 if (!member.equals(sender)) {
                                     ClientHandler memberHandler = clients.get(member);
                                     if (memberHandler != null) {
-                                        memberHandler.out.println("GROUP_FILE|" + msgId + "|" + sender + "|" + groupName + "|" + filename + "|" + base64data);
+                                        memberHandler.out.println(groupFileMsg);
+                                    } else {
+                                        offlineGroupMessages
+                                                .computeIfAbsent(groupName, k -> new ConcurrentHashMap<>())
+                                                .computeIfAbsent(member, k -> new ArrayList<>())
+                                                .add(groupFileMsg);
                                     }
                                 }
                             }
@@ -275,11 +304,13 @@ public class ChatServer {
                         if (members != null && members.contains(user)) {
                             groups.remove(oldGroupName);
                             groups.put(newGroupName, members);
-                            System.out.println(user + " changed group name from " + oldGroupName + " to " + newGroupName);
+                            System.out
+                                    .println(user + " changed group name from " + oldGroupName + " to " + newGroupName);
                             for (String member : members) {
                                 ClientHandler memberHandler = clients.get(member);
                                 if (memberHandler != null) {
-                                    memberHandler.out.println("GROUP_UPDATE|" + oldGroupName + "|NAME_CHANGED|" + newGroupName);
+                                    memberHandler.out
+                                            .println("GROUP_UPDATE|" + oldGroupName + "|NAME_CHANGED|" + newGroupName);
                                 }
                             }
                             groupDB.deleteGroup(oldGroupName);
@@ -320,11 +351,8 @@ public class ChatServer {
                     }
                     // --- ACK handling ---
                     else if (type.equals("ACK")) {
-                        for (ClientHandler handler : clients.values()) {
-                            if (!handler.username.equals(username)) {
-                                handler.out.println(message);
-                            }
-                        }
+                        // Instead of broadcasting ACK messages to all, simply log it.
+                        System.out.println("Received ACK: " + message);
                     }
                 }
             } catch (IOException e) {

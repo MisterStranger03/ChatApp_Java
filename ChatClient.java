@@ -6,7 +6,7 @@ import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
 import java.awt.*;
 import java.awt.event.*;
-import java.awt.geom.RoundRectangle2D;
+import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.Socket;
 import java.nio.file.Files;
@@ -25,14 +25,16 @@ public class ChatClient extends JFrame {
     private static final Color LIGHT_TEXT    = new Color(220, 220, 220);
     private static final Color ACCENT_COLOR  = new Color(100, 255, 218);
     private static final Color BUTTON_BG     = new Color(80, 180, 255);
+    private static final Color BUTTON_BG_HOVER = new Color(255, 255, 255);
     private static final Color BUTTON_TEXT   = Color.WHITE;
+    private static final Color BUTTON_TEXT_HOVER = Color.BLACK;
     private static final Color FIELD_BG      = new Color(60, 60, 60);
-    private static final Color DATE_BG       = new Color(80, 80, 80); // For date headers
+    private static final Color DATE_BG       = new Color(80, 80, 80);
 
     private static final Font TITLE_FONT  = new Font("SansSerif", Font.BOLD, 36);
     private static final Font LABEL_FONT  = new Font("SansSerif", Font.BOLD, 16);
     private static final Font FIELD_FONT  = new Font("SansSerif", Font.PLAIN, 16);
-    private static final Font BUTTON_FONT = new Font("SansSerif", Font.BOLD, 16);
+    private static final Font BUTTON_FONT = new Font("SansSerif", Font.BOLD, 14);
 
     // ------------- Database Info -------------
     private static final String DB_URL = "jdbc:sqlite:chatapp.db";
@@ -40,10 +42,7 @@ public class ChatClient extends JFrame {
     // ------------- Data Models -------------
     public static class User implements Serializable {
         private static final long serialVersionUID = 1L;
-        public String name;
-        public String username;
-        public String password;
-        public String profilePhotoBase64;
+        public String name, username, password, profilePhotoBase64;
         public Map<String, List<Message>> chatHistory = new HashMap<>();
         public Map<String, Integer> unreadCounts = new HashMap<>();
         public Map<String, String> unreadSnippets = new HashMap<>();
@@ -57,13 +56,7 @@ public class ChatClient extends JFrame {
 
     public static class Message implements Serializable {
         private static final long serialVersionUID = 1L;
-        private String messageId;
-        private String sender;
-        private String recipient;
-        private String content;
-        private String type;      // "MSG", "FILE", "GROUP_MSG", or "GROUP_FILE"
-        private String fileData;
-        private String status;
+        private String messageId, sender, recipient, content, type, fileData, status;
         private long timestamp;
 
         public Message(String messageId, String sender, String recipient, String content, String type, String fileData) {
@@ -104,7 +97,7 @@ public class ChatClient extends JFrame {
     private SQLDatabase db;
     private Map<String, User> users;
     private User currentUser;
-    // Local mapping for groups: groupName -> Set of members
+    // Local mapping for groups: groupName -> Set of members (should be updated via server notifications)
     private Map<String, Set<String>> groups = new HashMap<>();
 
     // ------------- Constructor -------------
@@ -148,10 +141,49 @@ public class ChatClient extends JFrame {
 
     public void styleButton(JButton button) {
         button.setFont(BUTTON_FONT);
-        button.setBackground(BUTTON_BG);
-        button.setForeground(BUTTON_TEXT);
-        button.setFocusPainted(false);
+        button.setContentAreaFilled(false);
+        button.setOpaque(false);
         button.setBorder(new RoundedBorder(10));
+        button.setUI(new javax.swing.plaf.basic.BasicButtonUI() {
+            public void paint(Graphics g, JComponent c) {
+                AbstractButton b = (AbstractButton) c;
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                ButtonModel model = b.getModel();
+                int arc = 20;
+                Color bg = BUTTON_BG;
+                Color fg = BUTTON_TEXT;
+                if (model.isRollover()) {
+                    bg = BUTTON_BG_HOVER;
+                    fg = BUTTON_TEXT_HOVER;
+                }
+                g2.setColor(bg);
+                g2.fillRoundRect(0, 0, b.getWidth(), b.getHeight(), arc, arc);
+                g2.setColor(ACCENT_COLOR);
+                g2.drawRoundRect(0, 0, b.getWidth() - 1, b.getHeight() - 1, arc, arc);
+                g2.setColor(fg);
+                FontMetrics fm = g2.getFontMetrics();
+                Rectangle r = new Rectangle(0, 0, b.getWidth(), b.getHeight());
+                String text = b.getText();
+                int textWidth = fm.stringWidth(text);
+                int textHeight = fm.getAscent();
+                int x = (r.width - textWidth) / 2;
+                int y = (r.height + textHeight) / 2 - 2;
+                g2.drawString(text, x, y);
+                g2.dispose();
+            }
+        });
+    }
+
+    public void styleInputArea(JTextArea area) {
+        area.setFont(FIELD_FONT);
+        area.setBackground(FIELD_BG);
+        area.setForeground(LIGHT_TEXT);
+        area.setCaretColor(LIGHT_TEXT);
+        area.setLineWrap(true);
+        area.setWrapStyleWord(true);
+        area.setBorder(new RoundedBorder(10));
+        area.setRows(1);
     }
 
     public void showLoader(String message) {
@@ -164,13 +196,14 @@ public class ChatClient extends JFrame {
         label.setFont(LABEL_FONT);
         loader.getContentPane().setBackground(DARK_BG);
         loader.add(label, BorderLayout.CENTER);
-        javax.swing.Timer t = new javax.swing.Timer(2000, e -> loader.dispose());
-        t.setRepeats(false);
-        t.start();
+        new javax.swing.Timer(2000, new ActionListener() {
+            public void actionPerformed(ActionEvent e) {
+                loader.dispose();
+            }
+        }).start();
         loader.setVisible(true);
     }
 
-    // Helper to scroll a JScrollPane to bottom
     public void scrollToBottom(JScrollPane scrollPane) {
         SwingUtilities.invokeLater(() -> {
             JScrollBar verticalBar = scrollPane.getVerticalScrollBar();
@@ -178,38 +211,30 @@ public class ChatClient extends JFrame {
         });
     }
 
-    // ------------- Custom RoundedBorder -------------
     public class RoundedBorder extends AbstractBorder {
         private int radius;
-        public RoundedBorder(int radius) {
-            this.radius = radius;
-        }
-        @Override
+        public RoundedBorder(int radius) { this.radius = radius; }
         public void paintBorder(Component c, Graphics g, int x, int y, int width, int height) {
             Graphics2D g2 = (Graphics2D) g;
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(c.getForeground());
+            g2.setColor(c.getBackground());
             g2.drawRoundRect(x, y, width - 1, height - 1, radius, radius);
         }
-        @Override
         public Insets getBorderInsets(Component c) {
-            return new Insets(radius+1, radius+1, radius+1, radius+1);
+            return new Insets(radius + 1, radius + 1, radius + 1, radius + 1);
         }
-        @Override
         public Insets getBorderInsets(Component c, Insets insets) {
-            insets.left = insets.top = insets.right = insets.bottom = radius+1;
+            insets.left = insets.top = insets.right = insets.bottom = radius + 1;
             return insets;
         }
     }
 
-    // ------------- ChatBubble Component -------------
-    // Fixed size chat bubbles with a fixed dimension and a message time.
     public class ChatBubble extends JPanel {
         private String message;
         private String timeText;
         private Color bubbleColor;
         private float alpha = 0f;
-        private int offset; // For slide animation
+        private int offset;
 
         public ChatBubble(String message, long timestamp, Color bubbleColor, boolean isSelf) {
             this.message = message;
@@ -218,20 +243,35 @@ public class ChatClient extends JFrame {
             this.timeText = sdf.format(new java.util.Date(timestamp));
             this.offset = isSelf ? 50 : -50;
             setOpaque(false);
-            // Fixed size bubble, e.g., 300 x 60
-            setPreferredSize(new Dimension(300, 60));
             setBorder(new EmptyBorder(8, 12, 20, 12));
         }
-
-        public void setAlpha(float alpha) {
-            this.alpha = alpha;
-            repaint();
+        
+        @Override
+        public Dimension getPreferredSize() {
+            Graphics g = getGraphics();
+            if (g == null) { g = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB).getGraphics(); }
+            FontMetrics fm = g.getFontMetrics(getFont());
+            int maxWidth = 300;
+            int lineHeight = fm.getHeight();
+            String[] words = message.split(" ");
+            int currentLineWidth = 0;
+            int lines = 1;
+            for (String word : words) {
+                int wordWidth = fm.stringWidth(word + " ");
+                if (currentLineWidth + wordWidth > maxWidth - 20) {
+                    lines++;
+                    currentLineWidth = wordWidth;
+                } else {
+                    currentLineWidth += wordWidth;
+                }
+            }
+            int width = Math.min(maxWidth, currentLineWidth + 20);
+            int height = lines * lineHeight + 20;
+            return new Dimension(width, height);
         }
 
-        public void setOffset(int offset) {
-            this.offset = offset;
-            repaint();
-        }
+        public void setAlpha(float alpha) { this.alpha = alpha; repaint(); }
+        public void setOffset(int offset) { this.offset = offset; repaint(); }
 
         @Override
         protected void paintComponent(Graphics g) {
@@ -248,8 +288,7 @@ public class ChatClient extends JFrame {
             g2.setFont(getFont());
             FontMetrics fm = g2.getFontMetrics();
             int textY = fm.getAscent() + 5;
-            String drawMsg = message; // We assume message fits; if not, we could truncate
-            g2.drawString(drawMsg, 10, textY);
+            g2.drawString(message, 10, textY);
             Font timeFont = getFont().deriveFont(Font.ITALIC, 10f);
             g2.setFont(timeFont);
             FontMetrics tfm = g2.getFontMetrics(timeFont);
@@ -260,8 +299,6 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- DateHeader Component -------------
-    // A small header bubble to display date above messages.
     public class DateHeader extends JPanel {
         private String dateText;
         public DateHeader(String dateText) {
@@ -290,7 +327,6 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- LoginPanel -------------
     private class LoginPanel extends JPanel {
         public LoginPanel() {
             setBackground(DARK_BG);
@@ -343,6 +379,7 @@ public class ChatClient extends JFrame {
                     if (user.password.equals(password)) {
                         ChatClient.this.showLoader("Logging in...");
                         currentUser = user;
+                        // Load individual and group messages (group messages are now loaded by checking type LIKE 'GROUP_%')
                         currentUser.chatHistory = db.loadMessagesForUser(currentUser.username);
                         chatMainPanel.refreshContacts();
                         chatMainPanel.refreshChatHistory();
@@ -363,7 +400,6 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- RegistrationPanel -------------
     private class RegistrationPanel extends JPanel {
         public RegistrationPanel() {
             setBackground(DARK_BG);
@@ -439,7 +475,6 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- ProfilePanel -------------
     private class ProfilePanel extends JPanel {
         private JLabel photoLabel;
         private JTextField nameField, usernameField;
@@ -551,7 +586,6 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- ChatMainPanel -------------
     private class ChatMainPanel extends JPanel {
         private DefaultListModel<String> contactsModel;
         private JList<String> contactsList;
@@ -620,7 +654,6 @@ public class ChatClient extends JFrame {
             chatSessionPanel.setBackground(DARKER_BG);
             chatSessionPanel.setBorder(BorderFactory.createTitledBorder(new LineBorder(ACCENT_COLOR), "Conversation"));
             contactsList.addMouseListener(new MouseAdapter() {
-                @Override
                 public void mouseClicked(MouseEvent e) {
                     if (e.getClickCount() == 2) {
                         String display = contactsList.getSelectedValue();
@@ -639,10 +672,12 @@ public class ChatClient extends JFrame {
             JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPanel, chatSessionPanel);
             splitPane.setDividerLocation(250);
             add(splitPane, BorderLayout.CENTER);
-            new javax.swing.Timer(5000, e -> {
-                users = db.loadUsers();
-                refreshContacts();
-                refreshChatHistory();
+            new javax.swing.Timer(5000, new ActionListener() {
+                public void actionPerformed(ActionEvent e) {
+                    users = db.loadUsers();
+                    refreshContacts();
+                    refreshChatHistory();
+                }
             }).start();
         }
 
@@ -658,9 +693,7 @@ public class ChatClient extends JFrame {
                     String display = uname;
                     if (unread > 0) {
                         display += "  (" + unread + ")";
-                        if (!snippet.isEmpty()) {
-                            display += " - " + snippet;
-                        }
+                        if (!snippet.isEmpty()) { display += " - " + snippet; }
                     }
                     contactsModel.addElement(display);
                 }
@@ -671,7 +704,33 @@ public class ChatClient extends JFrame {
         }
 
         public void refreshChatHistory() {
-            // Optionally update conversation panel
+            // Optionally update conversation panel if needed.
+        }
+
+        private JScrollPane createInputAreaPanel(JPanel parentPanel, java.util.function.Consumer<String> sendAction) {
+            JTextArea inputArea = new JTextArea(1, 30);
+            styleInputArea(inputArea);
+            JScrollPane inputScroll = new JScrollPane(inputArea);
+            inputScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+            inputScroll.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+            InputMap im = inputArea.getInputMap(JComponent.WHEN_FOCUSED);
+            ActionMap am = inputArea.getActionMap();
+            im.put(KeyStroke.getKeyStroke("ENTER"), "sendMessage");
+            im.put(KeyStroke.getKeyStroke("shift ENTER"), "insertNewLine");
+            am.put("sendMessage", new AbstractAction() {
+                public void actionPerformed(ActionEvent e) {
+                    sendAction.accept(inputArea.getText().trim());
+                    inputArea.setText("");
+                    inputArea.setRows(1);
+                }
+            });
+            am.put("insertNewLine", new AbstractAction() {
+                public void actionPerformed(ActionEvent e) {
+                    inputArea.append("\n");
+                    inputArea.setRows(inputArea.getLineCount());
+                }
+            });
+            return inputScroll;
         }
 
         public void openIndividualChatSession(String contact) {
@@ -684,12 +743,13 @@ public class ChatClient extends JFrame {
             conversationPanel = new JPanel();
             conversationPanel.setLayout(new BoxLayout(conversationPanel, BoxLayout.Y_AXIS));
             conversationPanel.setBackground(DARK_BG);
-            JScrollPane convScroll = new JScrollPane(conversationPanel);
+            final JScrollPane convScroll = new JScrollPane(conversationPanel);
             convScroll.setBorder(null);
             convScroll.getViewport().setBackground(DARK_BG);
             List<Message> history = currentUser.chatHistory.get(contact);
-            String lastDate = null;
             if (history != null) {
+                Collections.sort(history, Comparator.comparingLong(Message::getTimestamp));
+                String lastDate = null;
                 for (Message m : history) {
                     String msgDate = new SimpleDateFormat("MMM dd, yyyy").format(new java.util.Date(m.getTimestamp()));
                     if (lastDate == null || !lastDate.equals(msgDate)) {
@@ -699,57 +759,49 @@ public class ChatClient extends JFrame {
                     conversationPanel.add(createMessagePanel(m));
                 }
             }
+            scrollToBottom(convScroll);
             JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
             inputPanel.setBackground(DARKER_BG);
-            JTextField inputField = new JTextField(30);
-            ChatClient.this.styleTextField(inputField);
-            JButton sendMsgButton = new JButton("Send");
-            ChatClient.this.styleButton(sendMsgButton);
-            JButton sendFileButton = new JButton("Send File");
-            ChatClient.this.styleButton(sendFileButton);
-            JButton closeChatButton = new JButton("Close Chat");
-            ChatClient.this.styleButton(closeChatButton);
-            // Map Enter key to send and Esc to close
-            inputField.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke("ENTER"), "sendMsg");
-            inputField.getActionMap().put("sendMsg", new AbstractAction() {
-                @Override
-                public void actionPerformed(ActionEvent e) {
-                    sendMsgButton.doClick();
-                }
-            });
-            inputField.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke("ESCAPE"), "closeChat");
-            inputField.getActionMap().put("closeChat", new AbstractAction() {
-                @Override
-                public void actionPerformed(ActionEvent e) {
-                    closeChatButton.doClick();
-                }
-            });
-            sendMsgButton.addActionListener(e -> {
-                String msgText = inputField.getText().trim();
+            final JScrollPane inputScroll = createInputAreaPanel(inputPanel, msgText -> {
                 if (!msgText.isEmpty()) {
                     String msgId = currentUser.username + "-" + messageIdGenerator.getAndIncrement();
                     Message msg = new Message(msgId, currentUser.username, contact, msgText, "MSG", null);
                     msg.setStatus("PENDING");
                     addMessageToHistory(contact, msg);
                     String msgDate = new SimpleDateFormat("MMM dd, yyyy").format(new java.util.Date(msg.getTimestamp()));
-                    Component last = conversationPanel.getComponentCount() > 0 ?
-                            conversationPanel.getComponent(conversationPanel.getComponentCount() - 1) : null;
-                    String lastHeader = null;
-                    if (last instanceof DateHeader) {
-                        lastHeader = ((DateHeader) last).dateText;
-                    }
+                    Component last = conversationPanel.getComponentCount() > 0 ? conversationPanel.getComponent(conversationPanel.getComponentCount() - 1) : null;
+                    String lastHeader = (last instanceof DateHeader) ? ((DateHeader) last).dateText : null;
                     if (lastHeader == null || !lastHeader.equals(msgDate)) {
                         conversationPanel.add(new DateHeader(msgDate));
                     }
                     conversationPanel.add(createMessagePanel(msg));
                     conversationPanel.revalidate();
                     conversationPanel.repaint();
-                    inputField.setText("");
                     if (networkClient != null) {
                         networkClient.sendMessage(contact, "MSG|" + msgId + "|" + currentUser.username + "|" + contact + "|" + msgText);
                     }
                     scrollToBottom(convScroll);
                 }
+            });
+            JButton sendMsgButton = new JButton("Send");
+            ChatClient.this.styleButton(sendMsgButton);
+            JButton sendFileButton = new JButton("Send File");
+            ChatClient.this.styleButton(sendFileButton);
+            inputPanel.add(inputScroll);
+            inputPanel.add(sendMsgButton);
+            inputPanel.add(sendFileButton);
+            JButton closeChatButton = new JButton("Close Chat");
+            ChatClient.this.styleButton(closeChatButton);
+            inputPanel.add(closeChatButton);
+            closeChatButton.addActionListener(e -> {
+                chatSessionPanel.removeAll();
+                chatSessionPanel.revalidate();
+                chatSessionPanel.repaint();
+                currentChatContact = null;
+            });
+            sendMsgButton.addActionListener(e -> {
+                ActionMap amLocal = ((JTextArea) inputScroll.getViewport().getView()).getActionMap();
+                amLocal.get("sendMessage").actionPerformed(new ActionEvent(this, ActionEvent.ACTION_PERFORMED, null));
             });
             sendFileButton.addActionListener(e -> {
                 JFileChooser fc = new JFileChooser();
@@ -775,20 +827,6 @@ public class ChatClient extends JFrame {
                     }
                 }
             });
-            closeChatButton.addActionListener(e -> {
-                chatSessionPanel.removeAll();
-                chatSessionPanel.revalidate();
-                chatSessionPanel.repaint();
-                currentChatContact = null;
-            });
-            inputPanel.add(inputField);
-            inputPanel.add(sendMsgButton);
-            inputPanel.add(sendFileButton);
-            inputPanel.add(closeChatButton);
-            chatSessionPanel.add(convScroll, BorderLayout.CENTER);
-            chatSessionPanel.add(inputPanel, BorderLayout.SOUTH);
-            chatSessionPanel.revalidate();
-            chatSessionPanel.repaint();
             if (currentUser.chatHistory.containsKey(contact)) {
                 for (Message m : currentUser.chatHistory.get(contact)) {
                     if (!"READ".equals(m.getStatus()) && m.getSender().equals(contact)) {
@@ -800,11 +838,14 @@ public class ChatClient extends JFrame {
                 }
                 db.saveMessagesForUser(currentUser.username, currentUser.chatHistory);
             }
-            scrollToBottom(convScroll);
+            chatSessionPanel.add(convScroll, BorderLayout.CENTER);
+            chatSessionPanel.add(inputPanel, BorderLayout.SOUTH);
+            chatSessionPanel.revalidate();
+            chatSessionPanel.repaint();
         }
 
         public void openGroupChatSession(String groupName) {
-            currentChatContact = "Group: " + groupName;
+            currentChatContact = "Group:" + groupName;
             chatSessionPanel.removeAll();
             chatSessionPanel.setLayout(new BorderLayout());
             JPanel groupHeader = new JPanel(new BorderLayout());
@@ -814,8 +855,8 @@ public class ChatClient extends JFrame {
             groupLabel.setForeground(ACCENT_COLOR);
             groupHeader.add(groupLabel, BorderLayout.WEST);
             groupLabel.addMouseListener(new MouseAdapter() {
-                @Override
                 public void mouseClicked(MouseEvent e) {
+                    MouseEvent me = (MouseEvent) e;
                     JPopupMenu menu = new JPopupMenu();
                     JMenuItem leaveItem = new JMenuItem("Leave Group");
                     JMenuItem changeNameItem = new JMenuItem("Change Group Name");
@@ -830,7 +871,6 @@ public class ChatClient extends JFrame {
                             chatSessionPanel.revalidate();
                             chatSessionPanel.repaint();
                             currentChatContact = null;
-                            refreshContacts();
                         }
                     });
                     changeNameItem.addActionListener(ae -> {
@@ -860,19 +900,19 @@ public class ChatClient extends JFrame {
                     addUserItem.addActionListener(ae -> {
                         Set<String> currentMembers = groups.get(groupName);
                         List<String> availableUsers = new ArrayList<>();
-                        for(String uname : users.keySet()){
-                            if(!uname.equals(currentUser.username) && (currentMembers == null || !currentMembers.contains(uname))){
+                        for (String uname : users.keySet()) {
+                            if (!uname.equals(currentUser.username) && (currentMembers == null || !currentMembers.contains(uname))) {
                                 availableUsers.add(uname);
                             }
                         }
-                        if(availableUsers.isEmpty()){
+                        if (availableUsers.isEmpty()) {
                             JOptionPane.showMessageDialog(ChatMainPanel.this, "No users available to add.");
                             return;
                         }
                         JPanel panel = new JPanel();
                         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
                         Map<String, JCheckBox> checkboxMap = new HashMap<>();
-                        for(String user: availableUsers){
+                        for (String user : availableUsers) {
                             JCheckBox cb = new JCheckBox(user);
                             cb.setForeground(LIGHT_TEXT);
                             cb.setBackground(DARK_BG);
@@ -880,9 +920,9 @@ public class ChatClient extends JFrame {
                             checkboxMap.put(user, cb);
                         }
                         int result = JOptionPane.showConfirmDialog(ChatMainPanel.this, panel, "Select users to add", JOptionPane.OK_CANCEL_OPTION);
-                        if(result == JOptionPane.OK_OPTION){
-                            for(Map.Entry<String, JCheckBox> entry: checkboxMap.entrySet()){
-                                if(entry.getValue().isSelected()){
+                        if (result == JOptionPane.OK_OPTION) {
+                            for (Map.Entry<String, JCheckBox> entry : checkboxMap.entrySet()) {
+                                if (entry.getValue().isSelected()) {
                                     networkClient.sendMessage("", "ADD_TO_GROUP|" + groupName + "|" + currentUser.username + "|" + entry.getKey());
                                 }
                             }
@@ -892,19 +932,20 @@ public class ChatClient extends JFrame {
                     menu.add(changeNameItem);
                     menu.add(showMembersItem);
                     menu.add(addUserItem);
-                    menu.show(groupLabel, e.getX(), e.getY());
+                    menu.show(groupLabel, me.getX(), me.getY());
                 }
             });
             chatSessionPanel.add(groupHeader, BorderLayout.NORTH);
             conversationPanel = new JPanel();
             conversationPanel.setLayout(new BoxLayout(conversationPanel, BoxLayout.Y_AXIS));
             conversationPanel.setBackground(DARK_BG);
-            JScrollPane convScroll = new JScrollPane(conversationPanel);
+            final JScrollPane convScroll = new JScrollPane(conversationPanel);
             convScroll.setBorder(null);
             convScroll.getViewport().setBackground(DARK_BG);
             List<Message> history = currentUser.chatHistory.get("Group:" + groupName);
-            String lastDate = null;
             if (history != null) {
+                Collections.sort(history, Comparator.comparingLong(Message::getTimestamp));
+                String lastDate = null;
                 for (Message m : history) {
                     String msgDate = new SimpleDateFormat("MMM dd, yyyy").format(new java.util.Date(m.getTimestamp()));
                     if (lastDate == null || !lastDate.equals(msgDate)) {
@@ -914,57 +955,37 @@ public class ChatClient extends JFrame {
                     conversationPanel.add(createMessagePanel(m));
                 }
             }
+            scrollToBottom(convScroll);
             JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
             inputPanel.setBackground(DARK_BG);
-            JTextField inputField = new JTextField(30);
-            ChatClient.this.styleTextField(inputField);
-            JButton sendMsgButton = new JButton("Send");
-            ChatClient.this.styleButton(sendMsgButton);
-            JButton sendFileButton = new JButton("Send File");
-            ChatClient.this.styleButton(sendFileButton);
-            JButton closeChatButton = new JButton("Close Chat");
-            ChatClient.this.styleButton(closeChatButton);
-            // Map Enter key and Esc key similarly
-            inputField.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke("ENTER"), "sendMsg");
-            inputField.getActionMap().put("sendMsg", new AbstractAction() {
-                @Override
-                public void actionPerformed(ActionEvent e) {
-                    sendMsgButton.doClick();
-                }
-            });
-            inputField.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke("ESCAPE"), "closeChat");
-            inputField.getActionMap().put("closeChat", new AbstractAction() {
-                @Override
-                public void actionPerformed(ActionEvent e) {
-                    closeChatButton.doClick();
-                }
-            });
-            sendMsgButton.addActionListener(e -> {
-                String msgText = inputField.getText().trim();
+            final JScrollPane inputScroll = createInputAreaPanel(inputPanel, msgText -> {
                 if (!msgText.isEmpty()) {
                     String msgId = currentUser.username + "-" + messageIdGenerator.getAndIncrement();
                     Message msg = new Message(msgId, currentUser.username, groupName, msgText, "GROUP_MSG", null);
                     msg.setStatus("PENDING");
                     addMessageToHistory("Group:" + groupName, msg);
                     String msgDate = new SimpleDateFormat("MMM dd, yyyy").format(new java.util.Date(msg.getTimestamp()));
-                    Component last = conversationPanel.getComponentCount() > 0 ?
-                            conversationPanel.getComponent(conversationPanel.getComponentCount() - 1) : null;
-                    String lastHeader = null;
-                    if (last instanceof DateHeader) {
-                        lastHeader = ((DateHeader) last).dateText;
-                    }
+                    Component last = conversationPanel.getComponentCount() > 0 ? conversationPanel.getComponent(conversationPanel.getComponentCount() - 1) : null;
+                    String lastHeader = (last instanceof DateHeader) ? ((DateHeader) last).dateText : null;
                     if (lastHeader == null || !lastHeader.equals(msgDate)) {
                         conversationPanel.add(new DateHeader(msgDate));
                     }
                     conversationPanel.add(createMessagePanel(msg));
                     conversationPanel.revalidate();
                     conversationPanel.repaint();
-                    inputField.setText("");
                     if (networkClient != null) {
                         networkClient.sendMessage("", "GROUP_MSG|" + msgId + "|" + currentUser.username + "|" + groupName + "|" + msgText);
                     }
                     scrollToBottom(convScroll);
                 }
+            });
+            JButton sendMsgButton = new JButton("Send");
+            ChatClient.this.styleButton(sendMsgButton);
+            JButton sendFileButton = new JButton("Send File");
+            ChatClient.this.styleButton(sendFileButton);
+            sendMsgButton.addActionListener(e -> {
+                ActionMap amLocal = ((JTextArea) inputScroll.getViewport().getView()).getActionMap();
+                amLocal.get("sendMessage").actionPerformed(new ActionEvent(this, ActionEvent.ACTION_PERFORMED, null));
             });
             sendFileButton.addActionListener(e -> {
                 JFileChooser fc = new JFileChooser();
@@ -990,23 +1011,26 @@ public class ChatClient extends JFrame {
                     }
                 }
             });
+            JButton closeChatButton = new JButton("Close Chat");
+            ChatClient.this.styleButton(closeChatButton);
             closeChatButton.addActionListener(e -> {
                 chatSessionPanel.removeAll();
                 chatSessionPanel.revalidate();
                 chatSessionPanel.repaint();
                 currentChatContact = null;
             });
-            inputPanel.add(inputField);
-            inputPanel.add(sendMsgButton);
-            inputPanel.add(sendFileButton);
-            inputPanel.add(closeChatButton);
+            JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
+            bottomPanel.setBackground(DARK_BG);
+            bottomPanel.add(inputScroll);
+            bottomPanel.add(sendMsgButton);
+            bottomPanel.add(sendFileButton);
+            bottomPanel.add(closeChatButton);
             chatSessionPanel.add(convScroll, BorderLayout.CENTER);
-            chatSessionPanel.add(inputPanel, BorderLayout.SOUTH);
+            chatSessionPanel.add(bottomPanel, BorderLayout.SOUTH);
             chatSessionPanel.revalidate();
             chatSessionPanel.repaint();
         }
 
-        // openCreateGroupDialog inside ChatMainPanel
         private void openCreateGroupDialog() {
             JDialog groupDialog = new JDialog(ChatClient.this, "Create Group", true);
             groupDialog.setSize(400, 400);
@@ -1045,9 +1069,7 @@ public class ChatClient extends JFrame {
                 }
                 List<String> selected = new ArrayList<>();
                 for (Map.Entry<String, JCheckBox> entry : checkBoxes.entrySet()) {
-                    if (entry.getValue().isSelected()) {
-                        selected.add(entry.getKey());
-                    }
+                    if (entry.getValue().isSelected()) { selected.add(entry.getKey()); }
                 }
                 if (selected.isEmpty()) {
                     JOptionPane.showMessageDialog(groupDialog, "Select at least one contact.");
@@ -1074,10 +1096,8 @@ public class ChatClient extends JFrame {
         private JPanel createMessagePanel(Message m) {
             boolean isSelf = m.getSender().equals(currentUser.username);
             Color bubbleColor = isSelf ? new Color(100, 200, 255) : new Color(200, 200, 200);
-            ChatBubble bubble = new ChatBubble(
-                    isSelf ? "You: " + m.getContent() : m.getSender() + ": " + m.getContent(),
-                    m.getTimestamp(), bubbleColor, isSelf
-            );
+            ChatBubble bubble = new ChatBubble(isSelf ? "You: " + m.getContent() : m.getSender() + ": " + m.getContent(),
+                    m.getTimestamp(), bubbleColor, isSelf);
             bubble.setFont(new Font("SansSerif", Font.PLAIN, 14));
             bubble.setForeground(Color.BLACK);
             JPanel panel = new JPanel(new BorderLayout());
@@ -1124,9 +1144,7 @@ public class ChatClient extends JFrame {
                 currentUser.unreadCounts.put(contact, cnt);
                 String snippet = (m.getType().equals("FILE") || m.getType().equals("GROUP_FILE"))
                         ? "[File: " + m.getContent() + "]" : m.getContent();
-                if (snippet.length() > 20) {
-                    snippet = snippet.substring(0, 20) + "...";
-                }
+                if (snippet.length() > 20) { snippet = snippet.substring(0, 20) + "..."; }
                 currentUser.unreadSnippets.put(contact, snippet);
             }
             db.saveMessagesForUser(currentUser.username, currentUser.chatHistory);
@@ -1147,7 +1165,6 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // ------------- NetworkClient -------------
     private class NetworkClient implements Runnable {
         private Socket socket;
         private PrintWriter out;
@@ -1165,21 +1182,17 @@ public class ChatClient extends JFrame {
             }
         }
         public void sendMessage(String recipient, String message) {
-            if (out != null) {
-                out.println(message);
-            }
+            if (out != null) { out.println(message); }
         }
         public void run() {
             String line;
             try {
                 while ((line = in.readLine()) != null) {
                     String[] parts = line.split("\\|", 7);
-                    if (parts.length < 1)
-                        continue;
+                    if (parts.length < 1) continue;
                     String type = parts[0];
                     if (type.equals("MSG")) {
-                        if (parts.length < 5)
-                            continue;
+                        if (parts.length < 5) continue;
                         String msgId = parts[1];
                         String sender = parts[2];
                         String recipient = parts[3];
@@ -1204,8 +1217,7 @@ public class ChatClient extends JFrame {
                             m.setStatus("READ");
                         }
                     } else if (type.equals("FILE")) {
-                        if (parts.length < 6)
-                            continue;
+                        if (parts.length < 6) continue;
                         String msgId = parts[1];
                         String sender = parts[2];
                         String recipient = parts[3];
@@ -1230,8 +1242,7 @@ public class ChatClient extends JFrame {
                             m.setStatus("READ");
                         }
                     } else if (type.equals("GROUP_MSG")) {
-                        if (parts.length < 5)
-                            continue;
+                        if (parts.length < 5) continue;
                         String msgId = parts[1];
                         String sender = parts[2];
                         String groupName = parts[3];
@@ -1242,7 +1253,7 @@ public class ChatClient extends JFrame {
                         if (currentUser != null && (chatMainPanel.currentChatContact == null || !chatMainPanel.currentChatContact.equals(localGroupKey))) {
                             int cnt = currentUser.unreadCounts.getOrDefault(localGroupKey, 0) + 1;
                             currentUser.unreadCounts.put(localGroupKey, cnt);
-                            currentUser.unreadSnippets.put(localGroupKey, content.length() > 20 ? content.substring(0,20) + "..." : content);
+                            currentUser.unreadSnippets.put(localGroupKey, content.length() > 20 ? content.substring(0, 20) + "..." : content);
                             chatMainPanel.refreshContacts();
                         }
                         currentUser.chatHistory.computeIfAbsent(localGroupKey, k -> new ArrayList<>()).add(m);
@@ -1254,8 +1265,7 @@ public class ChatClient extends JFrame {
                             m.setStatus("READ");
                         }
                     } else if (type.equals("GROUP_FILE")) {
-                        if (parts.length < 6)
-                            continue;
+                        if (parts.length < 6) continue;
                         String msgId = parts[1];
                         String sender = parts[2];
                         String groupName = parts[3];
@@ -1284,9 +1294,7 @@ public class ChatClient extends JFrame {
                             String membersStr = parts[2];
                             Set<String> memSet = new HashSet<>(Arrays.asList(membersStr.split(",")));
                             groups.put(groupName, memSet);
-                            SwingUtilities.invokeLater(() -> {
-                                chatMainPanel.refreshContacts();
-                            });
+                            SwingUtilities.invokeLater(() -> { chatMainPanel.refreshContacts(); });
                         }
                     } else if (type.equals("GROUP_UPDATE")) {
                         if (parts.length >= 4) {
@@ -1303,25 +1311,16 @@ public class ChatClient extends JFrame {
                                 });
                             } else if (updateType.equals("MEMBER_LEFT")) {
                                 Set<String> mem = groups.get(groupName);
-                                if (mem != null) {
-                                    mem.remove(data);
-                                }
-                                SwingUtilities.invokeLater(() -> {
-                                    chatMainPanel.refreshContacts();
-                                });
+                                if (mem != null) { mem.remove(data); }
+                                SwingUtilities.invokeLater(() -> { chatMainPanel.refreshContacts(); });
                             } else if (updateType.equals("USER_ADDED")) {
                                 Set<String> mem = groups.get(groupName);
-                                if (mem != null) {
-                                    mem.add(data);
-                                }
-                                SwingUtilities.invokeLater(() -> {
-                                    chatMainPanel.refreshContacts();
-                                });
+                                if (mem != null) { mem.add(data); }
+                                SwingUtilities.invokeLater(() -> { chatMainPanel.refreshContacts(); });
                             }
                         }
                     } else if (type.equals("ACK")) {
-                        if (parts.length < 3)
-                            continue;
+                        if (parts.length < 3) continue;
                         String msgId = parts[1];
                         String status = parts[2];
                         SwingUtilities.invokeLater(() -> {
@@ -1341,50 +1340,32 @@ public class ChatClient extends JFrame {
             }
         }
         public void close() {
-            try {
-                socket.close();
-            } catch (IOException e) {}
+            try { socket.close(); } catch (IOException e) {}
         }
     }
 
-    // ------------- SQLDatabase Helper -------------
     private class SQLDatabase {
         private Connection conn;
         public SQLDatabase() {
             try {
                 Class.forName("org.sqlite.JDBC");
                 conn = DriverManager.getConnection(DB_URL);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            } catch (Exception e) { e.printStackTrace(); }
         }
         public void initialize() {
             String createUsers = "CREATE TABLE IF NOT EXISTS users (" +
-                    "username TEXT PRIMARY KEY, " +
-                    "name TEXT, " +
-                    "password TEXT, " +
-                    "profile_photo TEXT)";
+                    "username TEXT PRIMARY KEY, name TEXT, password TEXT, profile_photo TEXT)";
             String createMessages = "CREATE TABLE IF NOT EXISTS messages (" +
-                    "message_id TEXT PRIMARY KEY, " +
-                    "sender TEXT, " +
-                    "recipient TEXT, " +
-                    "content TEXT, " +
-                    "type TEXT, " +
-                    "file_data TEXT, " +
-                    "status TEXT, " +
-                    "timestamp INTEGER)";
+                    "message_id TEXT PRIMARY KEY, sender TEXT, recipient TEXT, content TEXT, type TEXT, file_data TEXT, status TEXT, timestamp INTEGER)";
             try (Statement stmt = conn.createStatement()) {
                 stmt.execute(createUsers);
                 stmt.execute(createMessages);
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            } catch (SQLException e) { e.printStackTrace(); }
         }
         public Map<String, User> loadUsers() {
             Map<String, User> userMap = new HashMap<>();
             String query = "SELECT * FROM users";
-            try (Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(query)) {
+            try (Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(query)) {
                 while (rs.next()) {
                     String username = rs.getString("username");
                     String name = rs.getString("name");
@@ -1394,9 +1375,7 @@ public class ChatClient extends JFrame {
                     u.profilePhotoBase64 = photo;
                     userMap.put(username, u);
                 }
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            } catch (SQLException e) { e.printStackTrace(); }
             return userMap;
         }
         public void saveUser(User u) {
@@ -1407,13 +1386,9 @@ public class ChatClient extends JFrame {
                 pstmt.setString(3, u.password);
                 pstmt.setString(4, u.profilePhotoBase64);
                 pstmt.executeUpdate();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            } catch (SQLException e) { e.printStackTrace(); }
         }
-        public void updateUser(User u) {
-            saveUser(u);
-        }
+        public void updateUser(User u) { saveUser(u); }
         public void saveMessage(Message m) {
             String insert = "INSERT OR REPLACE INTO messages(message_id, sender, recipient, content, type, file_data, status, timestamp) VALUES (?,?,?,?,?,?,?,?)";
             try (PreparedStatement pstmt = conn.prepareStatement(insert)) {
@@ -1426,9 +1401,7 @@ public class ChatClient extends JFrame {
                 pstmt.setString(7, m.getStatus());
                 pstmt.setLong(8, m.getTimestamp());
                 pstmt.executeUpdate();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            } catch (SQLException e) { e.printStackTrace(); }
         }
         public void saveMessagesForUser(String username, Map<String, List<Message>> chatHistory) {
             String delete = "DELETE FROM messages WHERE sender = ? OR recipient = ?";
@@ -1436,18 +1409,16 @@ public class ChatClient extends JFrame {
                 pstmt.setString(1, username);
                 pstmt.setString(2, username);
                 pstmt.executeUpdate();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            } catch (SQLException e) { e.printStackTrace(); }
             for (List<Message> msgs : chatHistory.values()) {
-                for (Message m : msgs) {
-                    saveMessage(m);
-                }
+                for (Message m : msgs) { saveMessage(m); }
             }
         }
+        // Modified query to load both individual and group messages.
         public Map<String, List<Message>> loadMessagesForUser(String username) {
             Map<String, List<Message>> history = new HashMap<>();
-            String query = "SELECT * FROM messages WHERE sender = ? OR recipient = ? ORDER BY timestamp ASC";
+            // Note: We load group messages as well by checking for messages where type starts with 'GROUP_'
+            String query = "SELECT * FROM messages WHERE sender = ? OR recipient = ? OR type LIKE 'GROUP_%' ORDER BY timestamp ASC";
             try (PreparedStatement pstmt = conn.prepareStatement(query)) {
                 pstmt.setString(1, username);
                 pstmt.setString(2, username);
@@ -1464,24 +1435,23 @@ public class ChatClient extends JFrame {
                         Message m = new Message(msgId, sender, recipient, content, type, fileData);
                         m.setStatus(status);
                         m.setTimestamp(timestamp);
-                        String contact = sender.equals(username) ? recipient : sender;
-                        history.computeIfAbsent(contact, k -> new ArrayList<>()).add(m);
+                        String key;
+                        if (type.startsWith("GROUP_")) {
+                            key = "Group:" + recipient;
+                        } else {
+                            key = sender.equals(username) ? recipient : sender;
+                        }
+                        history.computeIfAbsent(key, k -> new ArrayList<>()).add(m);
                     }
                 }
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            } catch (SQLException e) { e.printStackTrace(); }
             return history;
         }
     }
 
-    // ------------- Main Method -------------
     public static void main(String[] args) {
-        try {
-            UIManager.setLookAndFeel(new FlatDarkLaf());
-        } catch (UnsupportedLookAndFeelException e) {
-            e.printStackTrace();
-        }
+        try { UIManager.setLookAndFeel(new FlatDarkLaf()); }
+        catch (UnsupportedLookAndFeelException e) { e.printStackTrace(); }
         SwingUtilities.invokeLater(() -> {
             ChatClient client = new ChatClient();
             client.setVisible(true);
