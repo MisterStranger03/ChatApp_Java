@@ -1,6 +1,6 @@
 # Dark Mode Chat and File Sharing Application
 
-A modern Java Swing-based chat application featuring a dark mode user interface, real-time messaging with delivery/read confirmations, file sharing, profile management, persistent storage via SQLite, and smooth loader animations.
+A modern Java Swing-based chat application featuring a dark mode user interface, real-time messaging with delivery/read confirmations, file sharing, profile management, persistent storage via SQLite, and smooth loader animations and styles.
 
 ## Features
 
